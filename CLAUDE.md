@@ -3,6 +3,11 @@
 ## Project Overview
 Desktop GUI (PySide6) for loading, viewing, editing, and saving 3D scene graphs. Uses Neo4j as a live backend via heracles, with spark_dsg for the scene graph data model and JSON serialization.
 
+## Progress Tracking
+Implementation progress is tracked in the memory plan file ONLY:
+`~/.claude/projects/-home-jarkin-software-mit-sget-scene-graph-editing-tool/memory/project_sget_plan.md`
+Do NOT add status annotations (DONE, TODO, etc.) to this file.
+
 ## Tech Stack
 - **PySide6** — Qt GUI framework
 - **QGraphicsScene/QGraphicsView** — 2D hierarchical graph visualization
@@ -13,23 +18,23 @@ Desktop GUI (PySide6) for loading, viewing, editing, and saving 3D scene graphs.
 ## Project Structure
 ```
 src/sget/
-├── app.py                  # Entry point, CLI args, Neo4j connection (DONE)
-├── main_window.py          # QMainWindow with graph view, layer/property docks, File menu (DONE)
+├── app.py                  # Entry point, CLI args, Neo4j connection
+├── main_window.py          # QMainWindow with graph view, layer/property docks, File menu
 ├── backend/
-│   ├── neo4j_crud.py       # Single-node/edge CRUD on Neo4j (DONE, 23 tests)
-│   └── scene_graph_model.py # Central model: cache, Qt signals, selection (DONE, 22 tests)
+│   ├── neo4j_crud.py       # Single-node/edge CRUD on Neo4j
+│   └── scene_graph_model.py # Central model: cache, Qt signals, selection
 ├── views/
-│   ├── graph_view.py       # QGraphicsView 2D hierarchical graph (DONE)
-│   └── property_panel.py   # Node property editor with Apply button (DONE)
+│   ├── graph_view.py       # QGraphicsView 2D hierarchical graph
+│   └── property_panel.py   # Node property editor with Apply button
 ├── widgets/
-│   ├── layer_panel.py      # Layer visibility toggles + node counts (DONE)
-│   └── connection_dialog.py # Neo4j connection dialog (not yet implemented)
+│   ├── layer_panel.py      # Layer visibility toggles + node counts
+│   └── connection_dialog.py # Neo4j connection dialog
 └── utils/
-    ├── colors.py           # Per-layer colors, styling constants — single source of truth for layer order (DONE)
-    └── layout.py           # NetworkX hierarchical layout computation (DONE)
+    ├── colors.py           # Per-layer colors, styling — single source of truth for layer order
+    └── layout.py           # NetworkX hierarchical layout computation
 tests/
-├── test_neo4j_crud.py       # CRUD tests against live Neo4j (23 tests)
-├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility (22 tests)
+├── test_neo4j_crud.py       # CRUD tests against live Neo4j
+├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility
 └── test_placeholder.py       # Import smoke test
 ```
 
