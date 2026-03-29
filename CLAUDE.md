@@ -13,19 +13,31 @@ Desktop GUI (PySide6) for loading, viewing, editing, and saving 3D scene graphs.
 ## Project Structure
 ```
 src/sget/
-├── app.py              # Entry point, CLI args (not yet implemented)
-├── main_window.py      # QMainWindow with docks, menus, toolbar (not yet implemented)
+├── app.py                  # Entry point, CLI args, Neo4j connection (DONE)
+├── main_window.py          # QMainWindow with graph view, layer/property docks, File menu (DONE)
 ├── backend/
-│   ├── neo4j_crud.py   # Single-node/edge CRUD on Neo4j (DONE, 23 tests)
-│   └── scene_graph_model.py  # Central model: cache, Qt signals, selection (DONE, 22 tests)
-├── views/              # 2D graph view, property panel (not yet implemented)
-├── widgets/            # Layer panel, connection dialog (not yet implemented)
-└── utils/              # Colors, layout, helpers (not yet implemented)
+│   ├── neo4j_crud.py       # Single-node/edge CRUD on Neo4j (DONE, 23 tests)
+│   └── scene_graph_model.py # Central model: cache, Qt signals, selection (DONE, 22 tests)
+├── views/
+│   ├── graph_view.py       # QGraphicsView 2D hierarchical graph (DONE)
+│   └── property_panel.py   # Node property editor with Apply button (DONE)
+├── widgets/
+│   ├── layer_panel.py      # Layer visibility toggles + node counts (DONE)
+│   └── connection_dialog.py # Neo4j connection dialog (not yet implemented)
+└── utils/
+    ├── colors.py           # Per-layer colors, styling constants — single source of truth for layer order (DONE)
+    └── layout.py           # NetworkX hierarchical layout computation (DONE)
 tests/
 ├── test_neo4j_crud.py       # CRUD tests against live Neo4j (23 tests)
 ├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility (22 tests)
 └── test_placeholder.py       # Import smoke test
 ```
+
+## Architecture Notes
+- **Single source of truth for layer config**: `utils/colors.py` defines `LAYER_STYLES` (order, colors, IDs, labels). `scene_graph_model.py` derives `LAYER_ORDER` from it. Don't define layer lists elsewhere.
+- **Data flow**: JSON → spark_dsg (transient) → heracles bulk load → Neo4j → model cache → views. The spark_dsg object is NOT kept in memory.
+- **Model signals**: all mutations go through SceneGraphModel, which updates Neo4j + cache and emits Qt signals. Views never talk to Neo4j directly.
+- **Property panel**: converts between Neo4j's CartesianPoint format and [x,y,z] lists. The "pos" widget key maps to the "center" Neo4j property.
 
 ## Dependencies (sibling repos under ~/software/mit/sget/)
 - **spark_dsg**: `~/software/mit/sget/Spark-DSG/python/` — scene graph library with Python bindings
@@ -43,21 +55,25 @@ source ~/software/mit/virtual-envs/sget/bin/activate
 # Install (editable)
 pip install -e ".[dev]"
 
-# Run
-sget
-sget --neo4j-uri neo4j://127.0.0.1:7687 --neo4j-user neo4j --neo4j-password neo4j_pw
+# Run (requires Neo4j running on localhost:7687)
+sget --file path/to/scene_graph.json
+sget --neo4j-uri neo4j://127.0.0.1:7687 --neo4j-user neo4j --neo4j-password neo4j_pw --file path.json
+
+# Example DSG for testing
+sget --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
 
 # Lint
 ruff check src/ tests/
 ruff format src/ tests/
 
-# Test
+# Test (requires Neo4j on localhost:7687 with neo4j/neo4j_pw)
 pytest
 ```
 
 ## Key Conventions
 - Reuse heracles and spark_dsg APIs directly — don't duplicate their code
 - `heracles.constants` has layer name strings: `OBJECTS`, `PLACES`, `ROOMS`, `BUILDINGS`, `MESH_PLACES`
-- Node IDs use `spark_dsg.NodeSymbol(category_char, index)` — e.g., `NodeSymbol('O', 4)` for object #4
+- Node IDs use `spark_dsg.NodeSymbol(category_char, index)` — category char varies by DSG creator (e.g., 'O' or 'o' for Objects)
 - Scene graph layers: Objects(2), Places(3), Rooms(4), Buildings(5), MeshPlaces(20)
 - Neo4j edge types: intralayer (`OBJECT_CONNECTED`, `PLACE_CONNECTED`, etc.) and interlayer (`CONTAINS`)
+- Add comments explaining design choices, not just what code does

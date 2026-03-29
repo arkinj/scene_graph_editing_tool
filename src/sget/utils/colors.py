@@ -24,7 +24,13 @@ class LayerStyle:
 
 
 # Ordered from top of hierarchy (Buildings) to bottom (Objects).
-# This order is used by the layer panel and the 2D layout.
+# This order is used by the layer panel, the 2D layout, and the model's
+# LAYER_ORDER (which derives from this list to avoid duplication).
+#
+# Note on category_char: these are the *conventional* chars from spark_dsg's
+# DsgLayers, but the actual char in a node's ID depends on how the DSG was
+# created.  Heracles' test suite uses lowercase 'o' for Objects (not 'O').
+# The category_char here is used for display/lookup, not for creating nodes.
 LAYER_STYLES = [
     LayerStyle(constants.BUILDINGS, 5, "Buildings", "#636EFA", "B"),
     LayerStyle(constants.ROOMS, 4, "Rooms", "#EF553B", "R"),

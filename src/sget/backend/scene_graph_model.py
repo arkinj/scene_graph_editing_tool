@@ -53,15 +53,11 @@ from heracles.query_interface import Neo4jWrapper
 from PySide6.QtCore import QObject, Signal
 
 from sget.backend import neo4j_crud
+from sget.utils.colors import LAYER_STYLES
 
-# Layer IDs in display order (top to bottom in the hierarchy).
-LAYER_ORDER = [
-    (constants.BUILDINGS, 5),
-    (constants.ROOMS, 4),
-    (constants.PLACES, 3),
-    (constants.MESH_PLACES, 20),
-    (constants.OBJECTS, 2),
-]
+# Derived from LAYER_STYLES — single source of truth for layer ordering.
+# Used by load/save/cache methods that need (label, layer_id) tuples.
+LAYER_ORDER = [(s.layer_label, s.layer_id) for s in LAYER_STYLES]
 
 # Default metadata required by heracles for bulk load/export.
 # Maps spark_dsg layer IDs to heracles label strings.
