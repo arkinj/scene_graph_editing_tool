@@ -4,9 +4,9 @@
 Desktop GUI (PySide6) for loading, viewing, editing, and saving 3D scene graphs. Uses Neo4j as a live backend via heracles, with spark_dsg for the scene graph data model and JSON serialization.
 
 ## Progress Tracking
-Implementation progress is tracked in the memory plan file ONLY:
-`~/.claude/projects/-home-jarkin-software-mit-sget-scene-graph-editing-tool/memory/project_sget_plan.md`
-Do NOT add status annotations (DONE, TODO, etc.) to this file.
+Implementation progress is tracked in the plan file ONLY:
+`~/.claude/plans/wondrous-moseying-wren.md`
+Do NOT add status annotations (DONE, TODO, etc.) to this file or any other file.
 
 ## Tech Stack
 - **PySide6** — Qt GUI framework
