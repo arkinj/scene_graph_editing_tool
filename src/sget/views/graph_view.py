@@ -14,24 +14,33 @@ The view is populated by reading from the SceneGraphModel's cache and
 computing a hierarchical layout via ``utils.layout``.  It listens to model
 signals to stay in sync:
 - ``graph_loaded`` → full rebuild
+- ``node_added/removed`` → incremental item add/remove
+- ``edge_added/removed`` → incremental edge add/remove
 - ``selection_changed`` → update highlights
 - ``layer_visibility_changed`` → show/hide items
 
-For the initial demo, we do a full rebuild on ``graph_loaded`` only.
-Incremental updates (node_added/removed) will be wired in Phase 6.
+Incremental updates (node_added, node_removed, edge_added, edge_removed)
+add or remove individual QGraphicsItems without recomputing the full layout.
+New nodes are placed at the centroid of their layer's existing nodes, which
+is a reasonable default — the user can reposition by editing the position
+in the property panel and reloading.
 
 Node selection in the view updates the model's selection state, which
 propagates to all other views (property panel, etc.) via signals.
+
+Right-click context menu provides Add Edge (when 2 nodes selected) and
+Delete (for selected nodes or edges).
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QPen, QWheelEvent
+from PySide6.QtGui import QAction, QBrush, QColor, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsLineItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QMenu,
     QVBoxLayout,
     QWidget,
 )
@@ -40,11 +49,12 @@ from sget.backend.scene_graph_model import SceneGraphModel
 from sget.utils.colors import (
     INTERLAYER_EDGE_COLOR,
     INTRALAYER_EDGE_COLOR,
+    LAYER_STYLES,
     SELECTION_COLOR,
     SELECTION_PEN_WIDTH,
     STYLE_BY_LABEL,
 )
-from sget.utils.layout import compute_layout
+from sget.utils.layout import BAND_WIDTH, LAYER_BAND_HEIGHT, compute_layout
 
 # Node circle radius in scene coordinates.
 NODE_RADIUS = 12
@@ -107,6 +117,7 @@ class EdgeItem(QGraphicsLineItem):
         super().__init__()
         self.from_symbol = from_item.node_symbol
         self.to_symbol = to_item.node_symbol
+        self.is_interlayer = is_interlayer
 
         if is_interlayer:
             pen = QPen(QColor(INTERLAYER_EDGE_COLOR), 1, Qt.DashLine)
@@ -125,6 +136,9 @@ class EdgeItem(QGraphicsLineItem):
         # Edges should be behind nodes.
         self.setZValue(-1)
 
+        # Make edges selectable for deletion.
+        self.setFlag(QGraphicsLineItem.ItemIsSelectable, True)
+
 
 class GraphView(QWidget):
     """Container widget for the 2D scene graph visualization.
@@ -137,12 +151,14 @@ class GraphView(QWidget):
         super().__init__(parent)
         self._model = model
 
-        # Item tracking: node_symbol -> NodeItem, for selection sync.
+        # Item tracking for selection sync and incremental updates.
         self._node_items: dict[str, NodeItem] = {}
+        # Edge items keyed by (from_symbol, to_symbol) for lookup on removal.
+        self._edge_items: dict[tuple[str, str], EdgeItem] = {}
 
         # Qt graphics setup.
         self._scene = QGraphicsScene(self)
-        self._view = _ZoomableGraphicsView(self._scene)
+        self._view = _ZoomableGraphicsView(self._scene, self)
         self._view.setRenderHint(self._view.renderHints())
         self._view.setDragMode(QGraphicsView.RubberBandDrag)
 
@@ -154,6 +170,10 @@ class GraphView(QWidget):
         self._model.graph_loaded.connect(self._on_graph_loaded)
         self._model.selection_changed.connect(self._on_selection_changed)
         self._model.layer_visibility_changed.connect(self._on_layer_visibility_changed)
+        self._model.node_added.connect(self._on_node_added)
+        self._model.node_removed.connect(self._on_node_removed)
+        self._model.edge_added.connect(self._on_edge_added)
+        self._model.edge_removed.connect(self._on_edge_removed)
 
         # Connect scene selection changes to model.
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
@@ -170,6 +190,7 @@ class GraphView(QWidget):
         self._scene.selectionChanged.disconnect(self._on_scene_selection_changed)
         self._scene.clear()
         self._node_items = {}
+        self._edge_items = {}
 
         nodes = self._model.get_all_nodes()
         node_layers = {ns: self._model.get_node_layer(ns) for ns in nodes}
@@ -182,40 +203,117 @@ class GraphView(QWidget):
         for ns, props in nodes.items():
             layer_label = node_layers.get(ns, "")
             pos = positions.get(ns, (0, 0))
-
-            # Build display text: nodeSymbol + class if available.
-            display = ns
-            if "class" in props:
-                display = f"{ns}\n{props['class']}"
-
-            item = NodeItem(ns, layer_label, display, pos[0], pos[1])
-            self._scene.addItem(item)
-            self._node_items[ns] = item
-
-            # Respect current layer visibility.
-            if not self._model.is_layer_visible(layer_label):
-                item.setVisible(False)
+            self._add_node_item(ns, layer_label, props, pos[0], pos[1])
 
         # Create edge items.
         for edge in edges:
-            from_item = self._node_items.get(edge["from_symbol"])
-            to_item = self._node_items.get(edge["to_symbol"])
-            if from_item is None or to_item is None:
-                continue
-
-            is_interlayer = edge["edge_type"] == "CONTAINS"
-            edge_item = EdgeItem(from_item, to_item, is_interlayer)
-            self._scene.addItem(edge_item)
-
-            # Hide edge if either endpoint's layer is hidden.
-            if not from_item.isVisible() or not to_item.isVisible():
-                edge_item.setVisible(False)
+            self._add_edge_item(edge["from_symbol"], edge["to_symbol"], edge["edge_type"])
 
         # Fit the view to show all items.
         self._view.fitInView(self._scene.itemsBoundingRect(), Qt.KeepAspectRatio)
 
         # Reconnect selection handler.
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
+
+    # ------------------------------------------------------------------
+    # Incremental updates
+    # ------------------------------------------------------------------
+
+    def _on_node_added(self, node_symbol: str, layer_label: str):
+        """Add a single node to the scene without recomputing the full layout.
+
+        Places the new node at the centroid of existing nodes in its layer,
+        which is a reasonable default position.  The user can adjust the
+        position via the property panel.
+        """
+        props = self._model.get_node(node_symbol)
+        if props is None:
+            return
+
+        # Compute a position: centroid of existing nodes in this layer,
+        # or a default position in the layer's band if no siblings exist.
+        x, y = self._default_position_for_layer(layer_label)
+
+        self._add_node_item(node_symbol, layer_label, props, x, y)
+
+    def _on_node_removed(self, node_symbol: str, layer_label: str):
+        """Remove a single node and its connected edges from the scene."""
+        item = self._node_items.pop(node_symbol, None)
+        if item is not None:
+            self._scene.removeItem(item)
+
+        # Remove any edge items connected to this node.
+        to_remove = [key for key in self._edge_items if node_symbol in key]
+        for key in to_remove:
+            edge_item = self._edge_items.pop(key, None)
+            if edge_item is not None:
+                self._scene.removeItem(edge_item)
+
+    def _on_edge_added(self, from_symbol: str, to_symbol: str, edge_type: str):
+        """Add a single edge item to the scene."""
+        self._add_edge_item(from_symbol, to_symbol, edge_type)
+
+    def _on_edge_removed(self, from_symbol: str, to_symbol: str, edge_type: str):
+        """Remove a single edge item from the scene."""
+        key = (from_symbol, to_symbol)
+        edge_item = self._edge_items.pop(key, None)
+        if edge_item is not None:
+            self._scene.removeItem(edge_item)
+
+    # ------------------------------------------------------------------
+    # Item creation helpers
+    # ------------------------------------------------------------------
+
+    def _add_node_item(self, ns: str, layer_label: str, props: dict, x: float, y: float):
+        """Create a NodeItem and add it to the scene."""
+        display = ns
+        if "class" in props:
+            display = f"{ns}\n{props['class']}"
+
+        item = NodeItem(ns, layer_label, display, x, y)
+        self._scene.addItem(item)
+        self._node_items[ns] = item
+
+        # Respect current layer visibility.
+        if not self._model.is_layer_visible(layer_label):
+            item.setVisible(False)
+
+    def _add_edge_item(self, from_symbol: str, to_symbol: str, edge_type: str):
+        """Create an EdgeItem and add it to the scene."""
+        from_item = self._node_items.get(from_symbol)
+        to_item = self._node_items.get(to_symbol)
+        if from_item is None or to_item is None:
+            return
+
+        is_interlayer = edge_type == "CONTAINS"
+        edge_item = EdgeItem(from_item, to_item, is_interlayer)
+        self._scene.addItem(edge_item)
+        self._edge_items[(from_symbol, to_symbol)] = edge_item
+
+        # Hide edge if either endpoint's layer is hidden.
+        if not from_item.isVisible() or not to_item.isVisible():
+            edge_item.setVisible(False)
+
+    def _default_position_for_layer(self, layer_label: str) -> tuple[float, float]:
+        """Compute a default position for a new node in a given layer.
+
+        Returns the centroid of existing nodes in the layer, or the center
+        of the layer's band if the layer is empty.
+        """
+        # Find the Y band for this layer.
+        y = 0.0
+        for i, style in enumerate(LAYER_STYLES):
+            if style.layer_label == layer_label:
+                y = i * LAYER_BAND_HEIGHT
+                break
+
+        # Compute X as centroid of existing nodes in this layer.
+        xs = [
+            item.pos().x() for item in self._node_items.values() if item.layer_label == layer_label
+        ]
+        x = sum(xs) / len(xs) if xs else BAND_WIDTH / 2
+
+        return x, y
 
     # ------------------------------------------------------------------
     # Selection sync
@@ -263,23 +361,100 @@ class GraphView(QWidget):
                 item.setVisible(visible)
 
         # Also update edge visibility — hide if either endpoint is hidden.
-        for item in self._scene.items():
-            if isinstance(item, EdgeItem):
-                from_visible = self._node_items.get(item.from_symbol, None)
-                to_visible = self._node_items.get(item.to_symbol, None)
-                item.setVisible(
-                    (from_visible is not None and from_visible.isVisible())
-                    and (to_visible is not None and to_visible.isVisible())
-                )
+        for edge_item in self._edge_items.values():
+            from_vis = self._node_items.get(edge_item.from_symbol)
+            to_vis = self._node_items.get(edge_item.to_symbol)
+            edge_item.setVisible(
+                (from_vis is not None and from_vis.isVisible())
+                and (to_vis is not None and to_vis.isVisible())
+            )
+
+    # ------------------------------------------------------------------
+    # Context menu (right-click)
+    # ------------------------------------------------------------------
+
+    def _show_context_menu(self, pos):
+        """Show a context menu with available actions based on selection.
+
+        Called by the ZoomableGraphicsView on right-click.
+        """
+        menu = QMenu(self)
+
+        selected_nodes = [
+            item.node_symbol for item in self._scene.selectedItems() if isinstance(item, NodeItem)
+        ]
+        selected_edges = [
+            item for item in self._scene.selectedItems() if isinstance(item, EdgeItem)
+        ]
+
+        if len(selected_nodes) == 2:
+            add_edge_action = QAction("Add Edge", self)
+            add_edge_action.triggered.connect(
+                lambda: self._model.add_edge(selected_nodes[0], selected_nodes[1])
+            )
+            menu.addAction(add_edge_action)
+
+        if selected_nodes:
+            delete_action = QAction(f"Delete {len(selected_nodes)} Node(s)", self)
+            delete_action.triggered.connect(self._delete_selected_nodes)
+            menu.addAction(delete_action)
+
+        if selected_edges:
+            delete_edge_action = QAction(f"Delete {len(selected_edges)} Edge(s)", self)
+            delete_edge_action.triggered.connect(
+                lambda: self._delete_selected_edges(selected_edges)
+            )
+            menu.addAction(delete_edge_action)
+
+        if not menu.isEmpty():
+            menu.exec(self._view.mapToGlobal(pos))
+
+    def delete_selected(self):
+        """Delete whatever is selected — nodes first, then edges.
+
+        Called by the MainWindow's Delete action (keyboard shortcut).
+        """
+        selected_nodes = [
+            item.node_symbol for item in self._scene.selectedItems() if isinstance(item, NodeItem)
+        ]
+        selected_edges = [
+            item for item in self._scene.selectedItems() if isinstance(item, EdgeItem)
+        ]
+
+        if selected_nodes:
+            self._delete_selected_nodes()
+        elif selected_edges:
+            self._delete_selected_edges(selected_edges)
+
+    def _delete_selected_nodes(self):
+        """Delete all selected nodes via the model."""
+        # Collect symbols first — iterating while deleting would modify the list.
+        symbols = list(self._model.selected)
+        for ns in symbols:
+            self._model.remove_node(ns)
+
+    def _delete_selected_edges(self, edge_items: list[EdgeItem]):
+        """Delete the given edge items via the model."""
+        for item in edge_items:
+            self._model.remove_edge(item.from_symbol, item.to_symbol)
 
 
 class _ZoomableGraphicsView(QGraphicsView):
-    """QGraphicsView subclass that supports mouse wheel zoom.
+    """QGraphicsView subclass that supports mouse wheel zoom and context menus.
 
     The default QGraphicsView doesn't zoom on scroll — it scrolls the
     viewport.  This subclass intercepts wheel events and applies a scale
     transform instead, which is the expected behavior for a graph viewer.
+
+    Right-click events are forwarded to the parent GraphView for context
+    menu handling.
     """
+
+    def __init__(self, scene, graph_view: GraphView):
+        super().__init__(scene)
+        self._graph_view = graph_view
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._graph_view._show_context_menu)
 
     def wheelEvent(self, event: QWheelEvent):
         factor = 1.15
