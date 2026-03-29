@@ -13,12 +13,17 @@ Desktop GUI (PySide6) for loading, viewing, editing, and saving 3D scene graphs.
 ## Project Structure
 ```
 src/sget/
-├── app.py              # Entry point, CLI args
-├── main_window.py      # QMainWindow with docks, menus, toolbar
-├── backend/            # Neo4j CRUD, scene graph model
+├── app.py              # Entry point, CLI args (not yet implemented)
+├── main_window.py      # QMainWindow with docks, menus, toolbar (not yet implemented)
+├── backend/
+│   ├── neo4j_crud.py   # Single-node/edge CRUD on Neo4j (DONE, 23 tests)
+│   └── scene_graph_model.py  # Central model with Qt signals (not yet implemented)
 ├── views/              # 2D graph view, property panel
 ├── widgets/            # Layer panel, connection dialog
 └── utils/              # Colors, layout, helpers
+tests/
+├── test_neo4j_crud.py  # CRUD tests against live Neo4j (23 tests)
+└── test_placeholder.py # Import smoke test
 ```
 
 ## Dependencies (sibling repos under ~/software/mit/sget/)
