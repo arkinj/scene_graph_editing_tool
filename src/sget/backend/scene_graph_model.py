@@ -1,0 +1,510 @@
+"""
+Central model for the Scene Graph Editing Tool.
+
+Design overview
+===============
+``SceneGraphModel`` is a QObject that serves as the single source of truth for
+the entire application.  All views (2D graph, property panel, layer panel)
+observe this model through Qt signals, and all mutations flow through it.
+
+The model maintains two synchronized representations:
+
+1. **Neo4j database** — the persistent store, accessed via our CRUD layer
+   (``sget.backend.neo4j_crud``) for single-item operations and heracles'
+   bulk functions for full load/export.
+
+2. **In-memory cache** — dicts of node properties and edge tuples, populated
+   from Neo4j on load.  Views read from this cache (fast) rather than
+   querying Neo4j on every frame.  Mutations update both the cache and Neo4j,
+   then emit signals so views can refresh.
+
+Why not keep a spark_dsg.DynamicSceneGraph in memory?
+-----------------------------------------------------
+We considered holding the C++ DSG object as the live in-memory model, but:
+- spark_dsg's pybind11 bindings are primarily designed for bulk construction
+  and serialization, not fine-grained incremental mutation with change
+  notification.
+- We'd have to mirror every edit to both the DSG and Neo4j anyway.
+- For save/export, we reconstruct the DSG from Neo4j via heracles'
+  ``db_to_spark_dsg()`` — this is the same path heracles itself uses and
+  keeps serialization consistent.
+
+So the flow is: load JSON → push to Neo4j → populate cache → edit via cache+Neo4j
+→ export Neo4j → save JSON.  The DSG is a transient object used only at the
+load and save boundaries.
+
+Selection and visibility
+------------------------
+Selection (which nodes are highlighted/shown in property panel) and layer
+visibility (which layers are drawn) are UI concerns, but they need to be
+shared across multiple views.  Rather than coupling views to each other, the
+model owns this state and emits signals when it changes.  Any view can update
+selection or visibility through the model, and all other views react.
+"""
+
+import spark_dsg
+from heracles import constants
+from heracles.graph_interface import (
+    db_to_spark_dsg,
+    initialize_db,
+    spark_dsg_to_db,
+)
+from heracles.query_interface import Neo4jWrapper
+from PySide6.QtCore import QObject, Signal
+
+from sget.backend import neo4j_crud
+
+# Layer IDs in display order (top to bottom in the hierarchy).
+LAYER_ORDER = [
+    (constants.BUILDINGS, 5),
+    (constants.ROOMS, 4),
+    (constants.PLACES, 3),
+    (constants.MESH_PLACES, 20),
+    (constants.OBJECTS, 2),
+]
+
+# Default metadata required by heracles for bulk load/export.
+# Maps spark_dsg layer IDs to heracles label strings.
+# This must be added to the DSG metadata before calling spark_dsg_to_db().
+_DEFAULT_LAYER_ID_TO_HERACLES = {
+    2: constants.OBJECTS,
+    3: constants.PLACES,
+    4: constants.ROOMS,
+    5: constants.BUILDINGS,
+    20: constants.MESH_PLACES,
+    "3[1]": constants.MESH_PLACES,
+}
+
+
+class SceneGraphModel(QObject):
+    """Central model that all views observe.
+
+    Signals
+    -------
+    graph_loaded
+        Emitted after a full graph load (from JSON or DB).  Views should
+        rebuild their entire representation.
+    node_added(node_symbol: str, layer_label: str)
+        A single node was created.
+    node_removed(node_symbol: str, layer_label: str)
+        A single node was deleted (along with its edges).
+    node_updated(node_symbol: str, layer_label: str)
+        Properties on a node changed.
+    edge_added(from_symbol: str, to_symbol: str, edge_type: str)
+        An edge was created between two nodes.
+    edge_removed(from_symbol: str, to_symbol: str, edge_type: str)
+        An edge was deleted.
+    selection_changed(selected: list)
+        The set of selected node symbols changed.  ``selected`` is a list
+        of nodeSymbol strings.
+    layer_visibility_changed(layer_label: str, visible: bool)
+        A layer's visibility was toggled.
+    connection_changed(connected: bool)
+        Neo4j connection state changed.
+    """
+
+    graph_loaded = Signal()
+    node_added = Signal(str, str)
+    node_removed = Signal(str, str)
+    node_updated = Signal(str, str)
+    edge_added = Signal(str, str, str)
+    edge_removed = Signal(str, str, str)
+    selection_changed = Signal(list)
+    layer_visibility_changed = Signal(str, bool)
+    connection_changed = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # Neo4j connection (None when disconnected / offline mode).
+        self._db: Neo4jWrapper | None = None
+
+        # In-memory cache, populated from Neo4j after load.
+        # nodes: {node_symbol: {prop_name: value, ...}}
+        # edges: list of {from_label, from_symbol, to_label, to_symbol, edge_type}
+        self._nodes: dict[str, dict] = {}
+        self._node_layers: dict[str, str] = {}  # node_symbol -> layer_label
+        self._edges: list[dict] = []
+
+        # Labelspace mappings — needed for heracles' bulk export.
+        # label_to_semantic_id: {"box": 34, "tree": 2, ...}
+        # room_label_to_semantic_id: {"lounge": 0, "hallway": 1, ...}
+        self._label_to_semantic_id: dict[str, int] = {}
+        self._room_label_to_semantic_id: dict[str, int] = {}
+
+        # UI state shared across views.
+        self._selected: list[str] = []
+        self._layer_visibility: dict[str, bool] = {label: True for label, _ in LAYER_ORDER}
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    @property
+    def connected(self) -> bool:
+        return self._db is not None
+
+    def connect(self, uri: str, user: str, password: str, db_name: str = "neo4j"):
+        """Establish a Neo4j connection.
+
+        Raises on failure (bad credentials, unreachable server, etc.) — the
+        caller (main window / connection dialog) should catch and display.
+        """
+        db = Neo4jWrapper(uri, (user, password), db_name=db_name, atomic_queries=True)
+        db.connect()
+        self._db = db
+        self.connection_changed.emit(True)
+
+    def disconnect(self):
+        if self._db is not None:
+            self._db.close()
+            self._db = None
+            self.connection_changed.emit(False)
+
+    # ------------------------------------------------------------------
+    # Load / Save
+    # ------------------------------------------------------------------
+
+    def load_from_json(self, path: str):
+        """Load a scene graph JSON file into Neo4j and populate the cache.
+
+        Flow: JSON → spark_dsg.DynamicSceneGraph.load() → add metadata
+        required by heracles → heracles.initialize_db() + spark_dsg_to_db()
+        → populate in-memory cache from Neo4j → emit graph_loaded.
+
+        The DSG object is transient — we don't keep it around.  Neo4j is the
+        live store; the cache is the fast read path.
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        dsg = spark_dsg.DynamicSceneGraph.load(path)
+
+        # Extract labelspaces from DSG metadata if present, so we can
+        # round-trip them through save/export later.
+        metadata = dsg.metadata.get()
+        if "labelspace" in metadata:
+            # Heracles stores this as {str(semantic_id): label_name}.
+            raw = metadata["labelspace"]
+            self._label_to_semantic_id = {v: int(k) for k, v in raw.items()}
+        if "room_labelspace" in metadata:
+            raw = metadata["room_labelspace"]
+            self._room_label_to_semantic_id = {v: int(k) for k, v in raw.items()}
+
+        # Ensure the metadata heracles needs for bulk load is present.
+        if "LayerIdToHeraclesLayerStr" not in metadata:
+            dsg.metadata.add({"LayerIdToHeraclesLayerStr": _DEFAULT_LAYER_ID_TO_HERACLES})
+        if "labelspace" not in metadata:
+            dsg.metadata.add({"labelspace": {}})
+
+        # Push to Neo4j (clears existing data first).
+        initialize_db(self._db)
+        spark_dsg_to_db(dsg, self._db)
+
+        # Populate cache from what's now in Neo4j.
+        self._refresh_cache()
+        self._selected = []
+        self.graph_loaded.emit()
+
+    def save_to_json(self, path: str):
+        """Export the current Neo4j state to a JSON file via spark_dsg.
+
+        Flow: heracles.db_to_spark_dsg() → DynamicSceneGraph.save().
+        This reconstructs the DSG from Neo4j, which ensures the saved file
+        reflects exactly what's in the database.
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        # Build the mapping dicts that db_to_spark_dsg requires.
+        # These are the same dicts heracles uses internally.
+        spark_layer_id_to_name = {layer_id: label for label, layer_id in LAYER_ORDER}
+
+        # Invert our label->id maps for heracles' expected format.
+        label_to_sid = {name: sid for name, sid in self._label_to_semantic_id.items()}
+        room_label_to_sid = {name: sid for name, sid in self._room_label_to_semantic_id.items()}
+
+        dsg = db_to_spark_dsg(self._db, spark_layer_id_to_name, label_to_sid, room_label_to_sid)
+        dsg.save(path)
+
+    def _refresh_cache(self):
+        """Rebuild the in-memory cache from Neo4j.
+
+        Called after bulk load operations.  For incremental edits, the cache
+        is updated directly by the CRUD methods (faster than a full refresh).
+        """
+        self._nodes = {}
+        self._node_layers = {}
+        self._edges = []
+
+        for layer_label, _ in LAYER_ORDER:
+            nodes = neo4j_crud.get_all_nodes(self._db, layer_label)
+            for props in nodes:
+                ns = props["nodeSymbol"]
+                self._nodes[ns] = props
+                self._node_layers[ns] = layer_label
+
+        self._edges = neo4j_crud.get_all_edges(self._db)
+
+    # ------------------------------------------------------------------
+    # Read access (views read from cache, not Neo4j)
+    # ------------------------------------------------------------------
+
+    def get_node(self, node_symbol: str) -> dict | None:
+        """Get cached properties for a node, or None if not found."""
+        return self._nodes.get(node_symbol)
+
+    def get_node_layer(self, node_symbol: str) -> str | None:
+        """Get the layer label for a node, or None if not found."""
+        return self._node_layers.get(node_symbol)
+
+    def get_nodes_by_layer(self, layer_label: str) -> list[dict]:
+        """Get all cached nodes in a layer."""
+        return [
+            props for ns, props in self._nodes.items() if self._node_layers.get(ns) == layer_label
+        ]
+
+    def get_all_nodes(self) -> dict[str, dict]:
+        """Get the full node cache.  Returns {node_symbol: props_dict}."""
+        return self._nodes
+
+    def get_edges(self) -> list[dict]:
+        """Get the full edge cache."""
+        return self._edges
+
+    def node_count(self, layer_label: str) -> int:
+        """Count nodes in a layer (from cache)."""
+        return sum(1 for layer in self._node_layers.values() if layer == layer_label)
+
+    # ------------------------------------------------------------------
+    # Node mutations
+    # ------------------------------------------------------------------
+
+    def add_node(self, layer_label: str, node_symbol: str, props: dict):
+        """Create a node in Neo4j and the cache, then notify views.
+
+        ``props`` should contain the flat property dict expected by
+        ``neo4j_crud.create_node`` (pos_x/y/z, and layer-specific fields
+        like class, name, bbox_* for Objects).
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        neo4j_crud.create_node(self._db, layer_label, node_symbol, props)
+
+        # Update cache — read back from Neo4j to get the canonical form
+        # (e.g., Point3D values converted to lists).
+        stored = neo4j_crud.get_node(self._db, layer_label, node_symbol)
+        if stored is not None:
+            self._nodes[node_symbol] = stored
+            self._node_layers[node_symbol] = layer_label
+
+        self.node_added.emit(node_symbol, layer_label)
+
+    def remove_node(self, node_symbol: str):
+        """Delete a node and its edges from Neo4j and the cache.
+
+        Uses DETACH DELETE, so all connected edges are removed atomically.
+        We also remove those edges from the cache and emit signals for each.
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        layer_label = self._node_layers.get(node_symbol)
+        if layer_label is None:
+            return  # Node not in cache — nothing to do.
+
+        # Find and remove edges connected to this node from cache.
+        removed_edges = [
+            e
+            for e in self._edges
+            if e["from_symbol"] == node_symbol or e["to_symbol"] == node_symbol
+        ]
+        self._edges = [
+            e
+            for e in self._edges
+            if e["from_symbol"] != node_symbol and e["to_symbol"] != node_symbol
+        ]
+
+        # Delete from Neo4j (DETACH DELETE handles edges).
+        neo4j_crud.delete_node(self._db, layer_label, node_symbol)
+
+        # Remove from cache.
+        self._nodes.pop(node_symbol, None)
+        self._node_layers.pop(node_symbol, None)
+
+        # Remove from selection if present.
+        if node_symbol in self._selected:
+            self._selected = [s for s in self._selected if s != node_symbol]
+            self.selection_changed.emit(self._selected)
+
+        # Notify views — edges first, then node.
+        for e in removed_edges:
+            self.edge_removed.emit(e["from_symbol"], e["to_symbol"], e["edge_type"])
+        self.node_removed.emit(node_symbol, layer_label)
+
+    def update_node(self, node_symbol: str, props: dict):
+        """Update properties on an existing node.
+
+        ``props`` is a dict of property names to new values.  Point3D
+        properties (center, bbox_center, bbox_dim) should be [x, y, z] lists.
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        layer_label = self._node_layers.get(node_symbol)
+        if layer_label is None:
+            return
+
+        neo4j_crud.update_node(self._db, layer_label, node_symbol, props)
+
+        # Refresh this node's cache entry from Neo4j.
+        stored = neo4j_crud.get_node(self._db, layer_label, node_symbol)
+        if stored is not None:
+            self._nodes[node_symbol] = stored
+
+        self.node_updated.emit(node_symbol, layer_label)
+
+    # ------------------------------------------------------------------
+    # Edge mutations
+    # ------------------------------------------------------------------
+
+    def add_edge(
+        self,
+        from_symbol: str,
+        to_symbol: str,
+        edge_type: str | None = None,
+    ):
+        """Create an edge between two nodes.
+
+        If ``edge_type`` is not provided, it is inferred from the layer
+        labels of the two nodes (intralayer → *_CONNECTED, interlayer →
+        CONTAINS).
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        from_label = self._node_layers.get(from_symbol)
+        to_label = self._node_layers.get(to_symbol)
+        if from_label is None or to_label is None:
+            raise ValueError(
+                f"Cannot create edge: node(s) not found (from={from_symbol!r}, to={to_symbol!r})"
+            )
+
+        if edge_type is None:
+            edge_type = neo4j_crud.determine_edge_type(from_label, to_label)
+
+        neo4j_crud.create_edge(self._db, from_label, from_symbol, to_label, to_symbol, edge_type)
+
+        # Update cache.
+        self._edges.append(
+            {
+                "from_label": from_label,
+                "from_symbol": from_symbol,
+                "to_label": to_label,
+                "to_symbol": to_symbol,
+                "edge_type": edge_type,
+            }
+        )
+
+        self.edge_added.emit(from_symbol, to_symbol, edge_type)
+
+    def remove_edge(
+        self,
+        from_symbol: str,
+        to_symbol: str,
+        edge_type: str | None = None,
+    ):
+        """Delete an edge between two nodes."""
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        from_label = self._node_layers.get(from_symbol)
+        to_label = self._node_layers.get(to_symbol)
+        if from_label is None or to_label is None:
+            return
+
+        if edge_type is None:
+            edge_type = neo4j_crud.determine_edge_type(from_label, to_label)
+
+        neo4j_crud.delete_edge(self._db, from_label, from_symbol, to_label, to_symbol, edge_type)
+
+        # Update cache — remove matching edge(s).
+        self._edges = [
+            e
+            for e in self._edges
+            if not (
+                e["from_symbol"] == from_symbol
+                and e["to_symbol"] == to_symbol
+                and e["edge_type"] == edge_type
+            )
+        ]
+
+        self.edge_removed.emit(from_symbol, to_symbol, edge_type)
+
+    # ------------------------------------------------------------------
+    # Selection state
+    # ------------------------------------------------------------------
+
+    @property
+    def selected(self) -> list[str]:
+        """Currently selected node symbols (read-only copy)."""
+        return list(self._selected)
+
+    def set_selection(self, node_symbols: list[str]):
+        """Replace the current selection."""
+        self._selected = list(node_symbols)
+        self.selection_changed.emit(self._selected)
+
+    def clear_selection(self):
+        """Deselect all nodes."""
+        if self._selected:
+            self._selected = []
+            self.selection_changed.emit(self._selected)
+
+    def toggle_selection(self, node_symbol: str):
+        """Toggle a single node's selection state (for Ctrl+click)."""
+        if node_symbol in self._selected:
+            self._selected = [s for s in self._selected if s != node_symbol]
+        else:
+            self._selected = self._selected + [node_symbol]
+        self.selection_changed.emit(self._selected)
+
+    # ------------------------------------------------------------------
+    # Layer visibility
+    # ------------------------------------------------------------------
+
+    def is_layer_visible(self, layer_label: str) -> bool:
+        return self._layer_visibility.get(layer_label, True)
+
+    def set_layer_visibility(self, layer_label: str, visible: bool):
+        if self._layer_visibility.get(layer_label) != visible:
+            self._layer_visibility[layer_label] = visible
+            self.layer_visibility_changed.emit(layer_label, visible)
+
+    def get_layer_visibility(self) -> dict[str, bool]:
+        """Get visibility state for all layers."""
+        return dict(self._layer_visibility)
+
+    # ------------------------------------------------------------------
+    # Labelspace access (for property panel dropdowns)
+    # ------------------------------------------------------------------
+
+    def get_object_labels(self) -> dict[str, int]:
+        """Returns {label_name: semantic_id} for object/mesh_place classes."""
+        return dict(self._label_to_semantic_id)
+
+    def get_room_labels(self) -> dict[str, int]:
+        """Returns {label_name: semantic_id} for room classes."""
+        return dict(self._room_label_to_semantic_id)
+
+    def set_labelspaces(
+        self,
+        object_labels: dict[str, int] | None = None,
+        room_labels: dict[str, int] | None = None,
+    ):
+        """Set labelspace mappings (e.g., loaded from YAML files)."""
+        if object_labels is not None:
+            self._label_to_semantic_id = dict(object_labels)
+        if room_labels is not None:
+            self._room_label_to_semantic_id = dict(room_labels)
