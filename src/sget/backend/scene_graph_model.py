@@ -168,34 +168,39 @@ class SceneGraphModel(QObject):
     def load_from_json(self, path: str):
         """Load a scene graph JSON file into Neo4j and populate the cache.
 
-        Flow: JSON → spark_dsg.DynamicSceneGraph.load() → add metadata
+        Flow: JSON → spark_dsg.DynamicSceneGraph.load() → inject metadata
         required by heracles → heracles.initialize_db() + spark_dsg_to_db()
         → populate in-memory cache from Neo4j → emit graph_loaded.
 
         The DSG object is transient — we don't keep it around.  Neo4j is the
         live store; the cache is the fast read path.
+
+        Heracles' ``spark_dsg_to_db()`` requires two metadata entries on the
+        DSG object:
+        1. ``"labelspace"`` — {str(semantic_id): label_name} for objects
+        2. ``"LayerIdToHeraclesLayerStr"`` — {layer_id: heracles_label}
+
+        These are injected from the model's labelspace state (set via
+        ``set_labelspaces()`` or CLI args) rather than extracted from the DSG
+        file, because DSG files use inconsistent metadata formats.
         """
         if self._db is None:
             raise RuntimeError("Not connected to Neo4j")
 
         dsg = spark_dsg.DynamicSceneGraph.load(path)
 
-        # Extract labelspaces from DSG metadata if present, so we can
-        # round-trip them through save/export later.
-        metadata = dsg.metadata.get()
-        if "labelspace" in metadata:
-            # Heracles stores this as {str(semantic_id): label_name}.
-            raw = metadata["labelspace"]
-            self._label_to_semantic_id = {v: int(k) for k, v in raw.items()}
-        if "room_labelspace" in metadata:
-            raw = metadata["room_labelspace"]
-            self._room_label_to_semantic_id = {v: int(k) for k, v in raw.items()}
+        # Inject the metadata heracles needs for bulk load.
+        # Build the labelspace in heracles' expected format: {str(id): name}.
+        heracles_labelspace = {str(sid): name for name, sid in self._label_to_semantic_id.items()}
+        dsg.metadata.add({"labelspace": heracles_labelspace})
 
-        # Ensure the metadata heracles needs for bulk load is present.
-        if "LayerIdToHeraclesLayerStr" not in metadata:
-            dsg.metadata.add({"LayerIdToHeraclesLayerStr": _DEFAULT_LAYER_ID_TO_HERACLES})
-        if "labelspace" not in metadata:
-            dsg.metadata.add({"labelspace": {}})
+        if self._room_label_to_semantic_id:
+            heracles_room_labelspace = {
+                str(sid): name for name, sid in self._room_label_to_semantic_id.items()
+            }
+            dsg.metadata.add({"room_labelspace": heracles_room_labelspace})
+
+        dsg.metadata.add({"LayerIdToHeraclesLayerStr": _DEFAULT_LAYER_ID_TO_HERACLES})
 
         # Push to Neo4j (clears existing data first).
         initialize_db(self._db)
