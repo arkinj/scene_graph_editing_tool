@@ -59,6 +59,21 @@
 - [ ] Select edge → right-click → "Delete Edge" → edge disappears
 - [ ] Nodes remain after edge deletion
 
+## Group Nodes (Phase 7)
+- [ ] Select 2+ Object nodes (Ctrl+click) → Edit → Group (Ctrl+G) → dialog opens
+- [ ] Dialog shows correct child count and layer
+- [ ] Pick parent layer (Place or MeshPlace for Objects) → set class → OK
+- [ ] New parent node appears in the correct layer band
+- [ ] CONTAINS edges drawn from parent to each child
+- [ ] Layer panel counts update
+- [ ] Try grouping nodes from different layers → dialog shows error
+
+## Connection Dialog (Phase 7)
+- [ ] File → Connect to Neo4j → dialog opens with default values
+- [ ] Enter correct credentials → OK → status bar shows "Connected to Neo4j"
+- [ ] Enter wrong credentials → error message appears
+- [ ] After reconnecting, File → Open JSON still works
+
 ## Save Round-trip
 - [ ] File → Save As JSON → save to `/tmp/test_output.json`
 - [ ] File → Open JSON → load `/tmp/test_output.json` → graph looks the same
