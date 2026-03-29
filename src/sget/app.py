@@ -78,8 +78,12 @@ def main():
         sys.exit(1)
 
     # Load labelspaces so heracles can map semantic IDs to class names.
-    object_labels = get_labelspace(args.object_labelspace)
-    room_labels = get_labelspace(args.room_labelspace)
+    try:
+        object_labels = get_labelspace(args.object_labelspace)
+        room_labels = get_labelspace(args.room_labelspace)
+    except Exception as e:
+        QMessageBox.critical(None, "Labelspace Error", f"Failed to load labelspace: {e}")
+        sys.exit(1)
     # get_labelspace returns {int_id: str_name}; model wants {str_name: int_id}.
     model.set_labelspaces(
         object_labels={v: k for k, v in object_labels.items()},

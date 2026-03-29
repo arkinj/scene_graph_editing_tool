@@ -31,7 +31,7 @@ source ~/software/mit/virtual-envs/sget/bin/activate
 ### 3. Install dependencies
 
 ```bash
-# Install spark_dsg (C++ build, requires cmake)
+# Install spark_dsg (C++ build, requires cmake + libeigen3-dev)
 pip install -e ../Spark-DSG/
 
 # Install heracles
@@ -49,24 +49,71 @@ pre-commit install
 
 ## Running
 
-> **Note:** The GUI is under active development. The backend (Neo4j CRUD layer
-> and central model) is complete. The graphical interface is not yet implemented.
-
 ```bash
-# Launch with default settings (coming soon)
-sget
+# Load a scene graph file (connects to Neo4j with default credentials)
+sget --file path/to/scene_graph.json
 
-# Specify Neo4j connection and load a scene graph file
+# Specify Neo4j connection
 sget --neo4j-uri neo4j://127.0.0.1:7687 \
      --neo4j-user neo4j \
      --neo4j-password neo4j_pw \
      --file path/to/scene_graph.json
+
+# Example DSG for testing
+sget --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
 ```
+
+### CLI Options
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--neo4j-uri` | `neo4j://127.0.0.1:7687` | Neo4j bolt URI |
+| `--neo4j-user` | `neo4j` | Neo4j username |
+| `--neo4j-password` | `neo4j_pw` | Neo4j password |
+| `--neo4j-db` | `neo4j` | Neo4j database name |
+| `--file` | *(none)* | JSON scene graph file to load on startup |
+| `--object-labelspace` | `ade20k_mit_label_space.yaml` | YAML labelspace for object classes |
+| `--room-labelspace` | `b45_label_space.yaml` | YAML labelspace for room classes |
+
+## Features
+
+### Viewing
+- **2D hierarchical graph view** with nodes arranged in layer bands (Buildings top → Objects bottom)
+- **Layer panel** with checkboxes to toggle layer visibility and node counts
+- **Zoom/pan** with mouse wheel and drag
+- **Color-coded nodes** by layer
+
+### Selection & Properties
+- **Click** to select a node, **Ctrl+click** for multi-select, **rubber-band** drag for area select
+- **Property panel** shows selected node's attributes (position, name, class, bounding box)
+- **Edit and Apply** to push changes to Neo4j
+
+### Editing
+- **Add Node** (Ctrl+N): dialog to pick layer, position, name, and class
+- **Delete** (Delete key): remove selected nodes or edges
+- **Add Edge**: right-click with 2 nodes selected
+- **Delete Edge**: select an edge and press Delete or right-click
+- **Group** (Ctrl+G): select nodes in a layer, create a parent node in the higher layer with CONTAINS edges
+
+### File I/O
+- **File → Open JSON**: load a scene graph (clears and repopulates Neo4j)
+- **File → Save As JSON**: export current Neo4j state back to JSON via heracles
+- **File → Connect to Neo4j**: change Neo4j credentials without restarting
 
 ## Running Tests
 
 Tests require a running Neo4j instance on `localhost:7687` with credentials `neo4j`/`neo4j_pw`.
 
 ```bash
-pytest
+pytest                          # All tests
+pytest tests/test_neo4j_crud.py # Just the CRUD layer
+pytest tests/test_scene_graph_model.py  # Model tests
+pytest -k "selection"           # Tests matching a keyword
+```
+
+## Linting
+
+```bash
+ruff check src/ tests/
+ruff format src/ tests/
 ```

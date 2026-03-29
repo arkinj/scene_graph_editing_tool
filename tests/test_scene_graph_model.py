@@ -230,6 +230,44 @@ class TestNodeCRUD:
         assert len(spy.calls) == 1
         assert spy.calls[0] == ("o(0)", constants.OBJECTS)
 
+    def test_update_node_point3d(self, model):
+        """Test updating a Point3D property via the model.
+
+        This is the code path the property panel's Apply button exercises:
+        the "pos" spinboxes map to "center" in Neo4j, which is a Point3D.
+        The model must pass it through neo4j_crud.update_node, which wraps
+        the value in point().  The round-trip must preserve the coordinates.
+        """
+        _add_sample_place(model)
+
+        model.update_node("p(0)", {"center": [99.0, 88.0, 77.0]})
+
+        cached = model.get_node("p(0)")
+        # Neo4j returns CartesianPoint, which behaves like a sequence.
+        import numpy as np
+
+        assert np.allclose(cached["center"], [99.0, 88.0, 77.0])
+
+    def test_update_node_mixed_props(self, model):
+        """Update both scalar and Point3D properties in one model call."""
+        _add_sample_object(model)
+
+        model.update_node(
+            "o(0)",
+            {
+                "name": "new_name",
+                "center": [10.0, 20.0, 30.0],
+                "bbox_dim": [2.0, 3.0, 4.0],
+            },
+        )
+
+        cached = model.get_node("o(0)")
+        import numpy as np
+
+        assert cached["name"] == "new_name"
+        assert np.allclose(cached["center"], [10.0, 20.0, 30.0])
+        assert np.allclose(cached["bbox_dim"], [2.0, 3.0, 4.0])
+
     def test_node_count(self, model):
         assert model.node_count(constants.PLACES) == 0
         _add_sample_place(model, "p(0)")
