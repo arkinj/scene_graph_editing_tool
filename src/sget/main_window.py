@@ -1,12 +1,14 @@
 """
 Main application window.
 
-2D graph view as the central widget, layer panel as a left dock, property
-panel as a right dock, and a File menu for Open/Save/Quit.  The model is
-passed in from app.py (which handles CLI args and Neo4j connection).
+QMainWindow with 2D graph view as the central widget, layer panel as a left
+dock, property panel as a right dock.  File menu for Open/Save/Connect/Quit,
+Edit menu for Add Node/Delete/Group.  The model is passed in from app.py
+(which handles CLI args and Neo4j connection).
 """
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -18,6 +20,9 @@ from sget.backend.scene_graph_model import SceneGraphModel
 from sget.utils.colors import LAYER_STYLES
 from sget.views.graph_view import GraphView
 from sget.views.property_panel import PropertyPanel
+from sget.widgets.add_node_dialog import AddNodeDialog
+from sget.widgets.connection_dialog import ConnectionDialog
+from sget.widgets.group_dialog import GroupDialog
 from sget.widgets.layer_panel import LayerPanel
 
 
@@ -55,13 +60,28 @@ class MainWindow(QMainWindow):
         self._model.graph_loaded.connect(self._on_graph_loaded)
         self._model.connection_changed.connect(self._on_connection_changed)
 
+        # Update layer counts on node add/remove too.
+        self._model.node_added.connect(lambda *_: self._layer_panel._update_counts())
+        self._model.node_removed.connect(lambda *_: self._layer_panel._update_counts())
+
     def _setup_menus(self, layer_dock: QDockWidget, property_dock: QDockWidget):
         # File menu.
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction("&Open JSON...", self._open_json, "Ctrl+O")
         file_menu.addAction("&Save As JSON...", self._save_json, "Ctrl+Shift+S")
         file_menu.addSeparator()
+        file_menu.addAction("&Connect to Neo4j...", self._connect_neo4j)
+        file_menu.addSeparator()
         file_menu.addAction("&Quit", self.close, "Ctrl+Q")
+
+        # Edit menu — node/edge operations.
+        edit_menu = self.menuBar().addMenu("&Edit")
+        edit_menu.addAction("&Add Node...", self._add_node, "Ctrl+N")
+        edit_menu.addAction(
+            "&Delete Selected", self._graph_view.delete_selected, QKeySequence.Delete
+        )
+        edit_menu.addSeparator()
+        edit_menu.addAction("&Group Selected...", self._group_selected, "Ctrl+G")
 
         # View menu — toggle dock visibility.
         view_menu = self.menuBar().addMenu("&View")
@@ -96,6 +116,39 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
             self.statusBar().showMessage("Save failed")
+
+    def _add_node(self):
+        """Show the Add Node dialog and create the node if accepted."""
+        dialog = AddNodeDialog(self._model, self)
+        dialog.exec()
+        result = dialog.get_result()
+        if result is None:
+            return
+
+        layer_label, node_symbol, props = result
+        try:
+            self._model.add_node(layer_label, node_symbol, props)
+            self.statusBar().showMessage(f"Added {node_symbol} ({layer_label})")
+        except Exception as e:
+            QMessageBox.critical(self, "Add Node Error", str(e))
+
+    def _connect_neo4j(self):
+        """Show the connection dialog."""
+        ConnectionDialog(self._model, self).exec()
+
+    def _group_selected(self):
+        """Show the Group dialog for the currently selected nodes."""
+        selected = self._model.selected
+        if len(selected) < 2:
+            QMessageBox.information(
+                self, "Group", "Select 2 or more nodes in the same layer to group."
+            )
+            return
+
+        dialog = GroupDialog(self._model, selected, self)
+        parent_symbol = dialog.execute_group()
+        if parent_symbol:
+            self.statusBar().showMessage(f"Grouped {len(selected)} nodes under {parent_symbol}")
 
     def _on_graph_loaded(self):
         nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
