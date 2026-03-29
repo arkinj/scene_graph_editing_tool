@@ -6,6 +6,8 @@ Desktop application for loading, viewing, editing, and saving 3D scene graphs. U
 
 - Python 3.10+
 - Neo4j 5.x (via Docker)
+- `libeigen3-dev` (required to build spark_dsg: `sudo apt install libeigen3-dev`)
+- `cmake` (required to build spark_dsg)
 - `spark_dsg` and `heracles` installed (see below)
 
 ## Setup
@@ -47,8 +49,11 @@ pre-commit install
 
 ## Running
 
+> **Note:** The GUI is under active development. The backend (Neo4j CRUD layer
+> and central model) is complete. The graphical interface is not yet implemented.
+
 ```bash
-# Launch with default settings
+# Launch with default settings (coming soon)
 sget
 
 # Specify Neo4j connection and load a scene graph file
@@ -59,6 +64,8 @@ sget --neo4j-uri neo4j://127.0.0.1:7687 \
 ```
 
 ## Running Tests
+
+Tests require a running Neo4j instance on `localhost:7687` with credentials `neo4j`/`neo4j_pw`.
 
 ```bash
 pytest

@@ -17,13 +17,14 @@ src/sget/
 ├── main_window.py      # QMainWindow with docks, menus, toolbar (not yet implemented)
 ├── backend/
 │   ├── neo4j_crud.py   # Single-node/edge CRUD on Neo4j (DONE, 23 tests)
-│   └── scene_graph_model.py  # Central model with Qt signals (not yet implemented)
-├── views/              # 2D graph view, property panel
-├── widgets/            # Layer panel, connection dialog
-└── utils/              # Colors, layout, helpers
+│   └── scene_graph_model.py  # Central model: cache, Qt signals, selection (DONE, 22 tests)
+├── views/              # 2D graph view, property panel (not yet implemented)
+├── widgets/            # Layer panel, connection dialog (not yet implemented)
+└── utils/              # Colors, layout, helpers (not yet implemented)
 tests/
-├── test_neo4j_crud.py  # CRUD tests against live Neo4j (23 tests)
-└── test_placeholder.py # Import smoke test
+├── test_neo4j_crud.py       # CRUD tests against live Neo4j (23 tests)
+├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility (22 tests)
+└── test_placeholder.py       # Import smoke test
 ```
 
 ## Dependencies (sibling repos under ~/software/mit/sget/)
