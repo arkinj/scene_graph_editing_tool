@@ -68,8 +68,12 @@ class NodeItem(QGraphicsEllipseItem):
     """Visual representation of a scene graph node.
 
     Each node is a colored circle with a text label.  It is selectable
-    by clicking, and the view translates selection events into model
-    selection updates.
+    by clicking, and optionally draggable when positions are unlocked.
+
+    When dragged, connected edges are updated in real time via the
+    ``ItemSendsGeometryChanges`` flag and ``itemChange`` override.
+    The actual model update (writing to Neo4j) happens on mouse release,
+    handled by the parent GraphView.
     """
 
     def __init__(self, node_symbol: str, layer_label: str, display_text: str, x: float, y: float):
@@ -93,6 +97,8 @@ class NodeItem(QGraphicsEllipseItem):
 
         # Make it selectable (QGraphicsView handles click events).
         self.setFlag(QGraphicsEllipseItem.ItemIsSelectable, True)
+        # Enable geometry change notifications so we can update edges during drag.
+        self.setFlag(QGraphicsEllipseItem.ItemSendsGeometryChanges, True)
 
         # Text label below the circle.
         self._label = QGraphicsSimpleTextItem(display_text, self)
@@ -107,6 +113,18 @@ class NodeItem(QGraphicsEllipseItem):
             self.setPen(QPen(QColor(SELECTION_COLOR), SELECTION_PEN_WIDTH))
         else:
             self.setPen(self._default_pen)
+
+    def itemChange(self, change, value):
+        """Update connected edges in real time while dragging."""
+        if change == QGraphicsEllipseItem.ItemPositionHasChanged:
+            # Find the parent GraphView and ask it to reposition edges.
+            scene = self.scene()
+            if scene:
+                for view in scene.views():
+                    if hasattr(view, "_graph_view"):
+                        view._graph_view._update_edges_for_node(self.node_symbol)
+                        break
+        return super().itemChange(change, value)
 
 
 class EdgeItem(QGraphicsLineItem):
@@ -167,6 +185,10 @@ class GraphView(QWidget):
 
         # Boundary overlay items for Rooms with polygon data.
         self._boundary_items: dict[str, QGraphicsPolygonItem] = {}
+
+        # Position lock state.  When locked (default), nodes cannot be
+        # dragged.  Unlocked allows drag-to-reposition with live edge updates.
+        self._positions_locked = True
 
         # Polygon drawing state.
         self._polygon_mode_active = False
@@ -352,6 +374,61 @@ class GraphView(QWidget):
         return captured
 
     # ------------------------------------------------------------------
+    # Position lock / unlock (drag-to-reposition)
+    # ------------------------------------------------------------------
+
+    @property
+    def positions_locked(self) -> bool:
+        return self._positions_locked
+
+    def set_positions_locked(self, locked: bool):
+        """Toggle whether nodes can be dragged to reposition them.
+
+        When unlocked, nodes get the ItemIsMovable flag and can be dragged.
+        On drag release, the new position is written to Neo4j via the model.
+        When locked (default), nodes are not draggable.
+        """
+        self._positions_locked = locked
+        for item in self._node_items.values():
+            item.setFlag(QGraphicsEllipseItem.ItemIsMovable, not locked)
+
+    def _update_edges_for_node(self, node_symbol: str):
+        """Reposition all edges connected to a node (called during drag)."""
+        for key, edge_item in self._edge_items.items():
+            if node_symbol in key:
+                from_item = self._node_items.get(edge_item.from_symbol)
+                to_item = self._node_items.get(edge_item.to_symbol)
+                if from_item and to_item:
+                    edge_item.setLine(
+                        from_item.pos().x(),
+                        from_item.pos().y(),
+                        to_item.pos().x(),
+                        to_item.pos().y(),
+                    )
+
+    def commit_node_position(self, node_symbol: str):
+        """Write a dragged node's new position to the model (scene → world coords).
+
+        Called on mouse release after a drag. Converts scene coordinates
+        back to world coordinates and updates Neo4j.
+        """
+        item = self._node_items.get(node_symbol)
+        if item is None:
+            return
+
+        # Scene coords → world coords (reverse of layout projection).
+        world_x = item.pos().x() / DEFAULT_SCALE
+        world_y = -item.pos().y() / DEFAULT_SCALE
+
+        # Read current z from the model (we only drag in 2D).
+        props = self._model.get_node(node_symbol)
+        world_z = 0.0
+        if props and "center" in props:
+            world_z = float(props["center"][2])
+
+        self._model.update_node(node_symbol, {"center": [world_x, world_y, world_z]})
+
+    # ------------------------------------------------------------------
     # Full rebuild (on graph_loaded)
     # ------------------------------------------------------------------
 
@@ -483,6 +560,8 @@ class GraphView(QWidget):
             display = f"{ns}\n{props['class']}"
 
         item = NodeItem(ns, layer_label, display, x, y)
+        # Apply current lock state.
+        item.setFlag(QGraphicsEllipseItem.ItemIsMovable, not self._positions_locked)
         self._scene.addItem(item)
         self._node_items[ns] = item
 
@@ -829,6 +908,12 @@ class _ZoomableGraphicsView(QGraphicsView):
             self.viewport().setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
+        # If positions are unlocked, commit any dragged node positions to the model.
+        if not self._graph_view.positions_locked:
+            for item in self.scene().selectedItems():
+                if isinstance(item, NodeItem):
+                    self._graph_view.commit_node_position(item.node_symbol)
+
         super().mouseReleaseEvent(event)
         # ScrollHandDrag may reset the cursor on release — override again.
         if not self._graph_view.polygon_mode_active:

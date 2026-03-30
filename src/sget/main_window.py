@@ -80,6 +80,9 @@ class MainWindow(QMainWindow):
         self._model.node_added.connect(lambda *_: self._layer_panel._update_counts())
         self._model.node_removed.connect(lambda *_: self._layer_panel._update_counts())
 
+        # Wire the lock/unlock toggle to the graph view.
+        self._layer_panel._lock_cb.toggled.connect(self._graph_view.set_positions_locked)
+
     def _setup_menus(
         self, layer_dock: QDockWidget, property_dock: QDockWidget, snapshot_dock: QDockWidget
     ):

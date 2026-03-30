@@ -81,6 +81,12 @@ class LayerPanel(QWidget):
         self._interlayer_cb.toggled.connect(self._model.set_interlayer_edges_visible)
         layout.addWidget(self._interlayer_cb)
 
+        # Lock/unlock node positions — locked by default.  When unlocked,
+        # nodes can be dragged to reposition them in the graph view.
+        self._lock_cb = QCheckBox("Lock positions")
+        self._lock_cb.setChecked(True)
+        layout.addWidget(self._lock_cb)
+
         # Refresh counts when the graph is loaded.
         self._model.graph_loaded.connect(self._update_counts)
 
