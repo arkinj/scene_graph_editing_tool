@@ -49,12 +49,11 @@ from sget.backend.scene_graph_model import SceneGraphModel
 from sget.utils.colors import (
     INTERLAYER_EDGE_COLOR,
     INTRALAYER_EDGE_COLOR,
-    LAYER_STYLES,
     SELECTION_COLOR,
     SELECTION_PEN_WIDTH,
     STYLE_BY_LABEL,
 )
-from sget.utils.layout import BAND_WIDTH, LAYER_BAND_HEIGHT, compute_layout
+from sget.utils.layout import compute_layout
 
 # Node circle radius in scene coordinates.
 NODE_RADIUS = 12
@@ -174,6 +173,9 @@ class GraphView(QWidget):
         self._model.node_removed.connect(self._on_node_removed)
         self._model.edge_added.connect(self._on_edge_added)
         self._model.edge_removed.connect(self._on_edge_removed)
+        self._model.interlayer_edges_visibility_changed.connect(
+            self._on_interlayer_edges_visibility_changed
+        )
 
         # Connect scene selection changes to model.
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
@@ -290,29 +292,27 @@ class GraphView(QWidget):
         self._scene.addItem(edge_item)
         self._edge_items[(from_symbol, to_symbol)] = edge_item
 
-        # Hide edge if either endpoint's layer is hidden.
-        if not from_item.isVisible() or not to_item.isVisible():
-            edge_item.setVisible(False)
+        # Determine visibility: hide if either endpoint is hidden,
+        # or if it's an interlayer edge and those are toggled off.
+        visible = from_item.isVisible() and to_item.isVisible()
+        if is_interlayer and not self._model.show_interlayer_edges:
+            visible = False
+        edge_item.setVisible(visible)
 
     def _default_position_for_layer(self, layer_label: str) -> tuple[float, float]:
         """Compute a default position for a new node in a given layer.
 
-        Returns the centroid of existing nodes in the layer, or the center
-        of the layer's band if the layer is empty.
+        Returns the centroid of existing nodes in the layer, or (0, 0)
+        if the layer is empty.
         """
-        # Find the Y band for this layer.
-        y = 0.0
-        for i, style in enumerate(LAYER_STYLES):
-            if style.layer_label == layer_label:
-                y = i * LAYER_BAND_HEIGHT
-                break
-
-        # Compute X as centroid of existing nodes in this layer.
-        xs = [
-            item.pos().x() for item in self._node_items.values() if item.layer_label == layer_label
+        layer_items = [
+            item for item in self._node_items.values() if item.layer_label == layer_label
         ]
-        x = sum(xs) / len(xs) if xs else BAND_WIDTH / 2
+        if not layer_items:
+            return 0.0, 0.0
 
+        x = sum(item.pos().x() for item in layer_items) / len(layer_items)
+        y = sum(item.pos().y() for item in layer_items) / len(layer_items)
         return x, y
 
     # ------------------------------------------------------------------
@@ -360,14 +360,33 @@ class GraphView(QWidget):
             if item.layer_label == layer_label:
                 item.setVisible(visible)
 
-        # Also update edge visibility — hide if either endpoint is hidden.
+        self._update_edge_visibility()
+
+    def _on_interlayer_edges_visibility_changed(self, visible: bool):
+        """Toggle visibility of all interlayer (CONTAINS) edges."""
+        self._update_edge_visibility()
+
+    def _update_edge_visibility(self):
+        """Recompute visibility for all edges.
+
+        An edge is visible when:
+        1. Both endpoints are visible (their layers are toggled on), AND
+        2. If it's an interlayer edge, the interlayer toggle is on.
+        """
+        show_interlayer = self._model.show_interlayer_edges
         for edge_item in self._edge_items.values():
             from_vis = self._node_items.get(edge_item.from_symbol)
             to_vis = self._node_items.get(edge_item.to_symbol)
-            edge_item.setVisible(
-                (from_vis is not None and from_vis.isVisible())
-                and (to_vis is not None and to_vis.isVisible())
+            endpoints_visible = (
+                from_vis is not None
+                and from_vis.isVisible()
+                and to_vis is not None
+                and to_vis.isVisible()
             )
+            if edge_item.is_interlayer and not show_interlayer:
+                edge_item.setVisible(False)
+            else:
+                edge_item.setVisible(endpoints_visible)
 
     # ------------------------------------------------------------------
     # Context menu (right-click)

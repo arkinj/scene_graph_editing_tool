@@ -107,6 +107,7 @@ class SceneGraphModel(QObject):
     edge_removed = Signal(str, str, str)
     selection_changed = Signal(list)
     layer_visibility_changed = Signal(str, bool)
+    interlayer_edges_visibility_changed = Signal(bool)
     connection_changed = Signal(bool)
 
     def __init__(self, parent=None):
@@ -131,6 +132,7 @@ class SceneGraphModel(QObject):
         # UI state shared across views.
         self._selected: list[str] = []
         self._layer_visibility: dict[str, bool] = {label: True for label, _ in LAYER_ORDER}
+        self._show_interlayer_edges: bool = False  # Off by default — reduces visual clutter
 
     # ------------------------------------------------------------------
     # Connection management
@@ -486,6 +488,15 @@ class SceneGraphModel(QObject):
     def get_layer_visibility(self) -> dict[str, bool]:
         """Get visibility state for all layers."""
         return dict(self._layer_visibility)
+
+    @property
+    def show_interlayer_edges(self) -> bool:
+        return self._show_interlayer_edges
+
+    def set_interlayer_edges_visible(self, visible: bool):
+        if self._show_interlayer_edges != visible:
+            self._show_interlayer_edges = visible
+            self.interlayer_edges_visibility_changed.emit(visible)
 
     # ------------------------------------------------------------------
     # Labelspace access (for property panel dropdowns)

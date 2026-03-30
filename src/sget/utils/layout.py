@@ -1,36 +1,25 @@
 """
-Hierarchical layout computation for the 2D scene graph view.
+Spatial layout computation for the 2D scene graph view.
 
 Design
 ------
-The layout arranges nodes in horizontal bands, one per layer, with the most
-abstract layer (Buildings) at the top and the most concrete (Objects) at the
-bottom.  This mirrors the scene graph hierarchy visually.
+Nodes are positioned using their actual 3D coordinates from the scene graph,
+projected onto the x-y plane.  This preserves the spatial relationships
+between nodes — objects that are near each other in the real environment
+appear near each other in the view.
 
-Within each band, nodes are positioned using NetworkX's spring layout, which
-clusters connected nodes together.  The per-band Y coordinate is fixed, and
-only the X positions come from the spring layout.
+The ``center`` property in Neo4j is a CartesianPoint with x, y, z
+coordinates.  We use x for the horizontal axis and y for the vertical axis
+(negated, since Qt's y-axis increases downward but spatial y typically
+increases upward).
 
-We don't use ``nx.multipartite_layout`` because it spaces nodes evenly
-regardless of connectivity — spring layout produces more meaningful groupings
-within each layer.
-
-The layout operates on the model's cache (dicts of node properties and edge
-lists) rather than constructing a NetworkX graph from the spark_dsg object.
-This keeps the layout independent of the spark_dsg bindings and avoids
-importing the C++ module just for positioning.
+A scale factor converts from world coordinates (meters) to scene coordinates
+(pixels).  The layout auto-scales to fit the data.
 """
 
-import networkx as nx
-import numpy as np
-
-from sget.utils.colors import LAYER_STYLES
-
-# Vertical spacing between layer bands (in scene units).
-LAYER_BAND_HEIGHT = 300.0
-
-# Horizontal scale factor for the spring layout within each band.
-BAND_WIDTH = 800.0
+# Scale factor from world coordinates to scene pixels.
+# Tuned so a typical indoor scene (~30m across) fills ~800px.
+DEFAULT_SCALE = 30.0
 
 
 def compute_layout(
@@ -38,7 +27,11 @@ def compute_layout(
     node_layers: dict[str, str],
     edges: list[dict],
 ) -> dict[str, tuple[float, float]]:
-    """Compute 2D positions for all nodes.
+    """Compute 2D positions for all nodes from their spatial coordinates.
+
+    Uses the ``center`` property from each node's cached properties.
+    Projects 3D → 2D by taking (x, -y) — the negation puts "north" at
+    the top of the screen, matching typical map conventions.
 
     Parameters
     ----------
@@ -47,68 +40,29 @@ def compute_layout(
     node_layers : dict
         {node_symbol: layer_label} from SceneGraphModel cache.
     edges : list
-        Edge dicts from SceneGraphModel cache, each with
-        from_symbol, to_symbol, edge_type.
+        Edge dicts (unused in spatial layout, kept for API compatibility).
 
     Returns
     -------
     dict
         {node_symbol: (x, y)} positions in scene coordinates.
-        Y increases downward (Buildings at y=0, Objects at bottom).
     """
     if not nodes:
         return {}
 
-    # Assign each layer a Y band.  Index 0 = top of hierarchy = Buildings.
-    layer_y = {}
-    for i, style in enumerate(LAYER_STYLES):
-        layer_y[style.layer_label] = i * LAYER_BAND_HEIGHT
-
-    # Group nodes by layer for per-band spring layout.
-    layer_nodes: dict[str, list[str]] = {}
-    for ns, label in node_layers.items():
-        layer_nodes.setdefault(label, []).append(ns)
-
-    # Build a NetworkX graph of intralayer edges only — these drive the
-    # spring layout within each band.
-    intralayer_edges_by_layer: dict[str, list[tuple[str, str]]] = {}
-    for e in edges:
-        fl = node_layers.get(e["from_symbol"])
-        tl = node_layers.get(e["to_symbol"])
-        if fl is not None and tl is not None and fl == tl:
-            intralayer_edges_by_layer.setdefault(fl, []).append((e["from_symbol"], e["to_symbol"]))
-
     positions = {}
 
-    for label, ns_list in layer_nodes.items():
-        y = layer_y.get(label, len(LAYER_STYLES) * LAYER_BAND_HEIGHT)
+    for ns, props in nodes.items():
+        center = props.get("center")
+        if center is not None:
+            # Project 3D → 2D: use x and -y (negate y so "up" is up).
+            # Scale from world coordinates (meters) to scene pixels.
+            x = float(center[0]) * DEFAULT_SCALE
+            y = -float(center[1]) * DEFAULT_SCALE
+        else:
+            # Fallback for nodes without a position.
+            x, y = 0.0, 0.0
 
-        if len(ns_list) == 1:
-            # Single node — center it.
-            positions[ns_list[0]] = (BAND_WIDTH / 2, y)
-            continue
-
-        # Build a subgraph for this layer's spring layout.
-        sub = nx.Graph()
-        sub.add_nodes_from(ns_list)
-        for u, v in intralayer_edges_by_layer.get(label, []):
-            if u in sub and v in sub:
-                sub.add_edge(u, v)
-
-        # Spring layout returns {node: array([x, y])}.
-        # We only use the x coordinate; y is fixed per band.
-        try:
-            raw = nx.spring_layout(sub, scale=BAND_WIDTH / 2, iterations=50, seed=42)
-        except Exception:
-            # Fallback: evenly space nodes along the band.
-            raw = {
-                ns: np.array([i * BAND_WIDTH / max(len(ns_list) - 1, 1), 0])
-                for i, ns in enumerate(ns_list)
-            }
-
-        for ns, pos in raw.items():
-            # Shift x so the band is centered around BAND_WIDTH/2.
-            x = pos[0] + BAND_WIDTH / 2
-            positions[ns] = (x, y)
+        positions[ns] = (x, y)
 
     return positions
