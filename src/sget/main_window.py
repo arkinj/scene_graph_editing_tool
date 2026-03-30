@@ -95,9 +95,8 @@ class MainWindow(QMainWindow):
         edit_menu.addAction("&Group Selected...", self._group_selected, "Ctrl+G")
         edit_menu.addAction("&Draw Region...", self._draw_region, "Ctrl+R")
 
-        # Set up polygon completion callback — when the polygon tool finishes,
-        # it calls this to open the Group dialog with the captured nodes.
-        self._graph_view._on_polygon_completed = self._on_polygon_completed
+        # When the polygon drawing tool completes, open the Group dialog.
+        self._graph_view.polygon_completed.connect(self._on_polygon_completed)
 
         # View menu — toggle dock visibility.
         view_menu = self.menuBar().addMenu("&View")
@@ -271,4 +270,4 @@ class MainWindow(QMainWindow):
                     self._model.refresh_from_db()
                     self._last_refresh_time = now
                 except Exception:
-                    pass  # Silently ignore — manual refresh is always available.
+                    self.statusBar().showMessage("Auto-refresh failed (Ctrl+Shift+R to retry)")

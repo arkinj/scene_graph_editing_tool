@@ -29,7 +29,7 @@ all feed into the same Group dialog:
 - Polygon boundary → automatic Group dialog with boundary data
 """
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QWheelEvent
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -151,6 +151,11 @@ class GraphView(QWidget):
     node/edge items.  Connects to the SceneGraphModel to stay in sync.
     """
 
+    # Emitted when the polygon drawing tool completes. Args:
+    #   captured_symbols: list of node symbols inside the polygon
+    #   boundary: list of (x, y) tuples in world coordinates
+    polygon_completed = Signal(list, list)
+
     def __init__(self, model: SceneGraphModel, parent: QWidget | None = None):
         super().__init__(parent)
         self._model = model
@@ -244,7 +249,8 @@ class GraphView(QWidget):
         The click already added the vertex, so we just close.
         """
         if len(self._polygon_vertices) < 3:
-            # Need at least 3 vertices for a polygon.
+            # Need at least 3 vertices for a polygon — cancel and inform user.
+            self.cancel_polygon_mode()
             return
 
         # Find nodes inside the polygon.
@@ -260,11 +266,8 @@ class GraphView(QWidget):
         # Exit polygon mode.
         self.cancel_polygon_mode()
 
-        # Notify the main window to open the Group dialog with captured nodes.
-        # We use a callback pattern — MainWindow sets this when it wires up
-        # the Draw Region action.
-        if hasattr(self, "_on_polygon_completed") and self._on_polygon_completed:
-            self._on_polygon_completed(captured, boundary_world)
+        # Notify listeners (MainWindow) to open the Group dialog.
+        self.polygon_completed.emit(captured, boundary_world)
 
     def _on_polygon_mouse_move(self, scene_pos: QPointF):
         """Update the preview line from the last vertex to the cursor."""
@@ -379,8 +382,10 @@ class GraphView(QWidget):
         # Draw boundary overlays for Rooms with polygon data.
         self._draw_boundaries()
 
-        # Fit the view to show all items.
-        self._view.fitInView(self._scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+        # Fit the view to show all items (guard against empty scene).
+        bounds = self._scene.itemsBoundingRect()
+        if not bounds.isNull():
+            self._view.fitInView(bounds, Qt.KeepAspectRatio)
 
         # Clear search bar.
         self._search_bar.clear()
@@ -524,7 +529,9 @@ class GraphView(QWidget):
                 item.setVisible(visible)
 
         # Toggle boundary overlays for Room layer.
-        if layer_label == "Room":
+        from heracles import constants as hc
+
+        if layer_label == hc.ROOMS:
             for boundary_item in self._boundary_items.values():
                 boundary_item.setVisible(visible)
 
@@ -574,7 +581,7 @@ class GraphView(QWidget):
             item for item in self._scene.selectedItems() if isinstance(item, EdgeItem)
         ]
 
-        if len(selected_nodes) == 2:
+        if len(selected_nodes) == 2 and selected_nodes[0] != selected_nodes[1]:
             add_edge_action = QAction("Add Edge", self)
             add_edge_action.triggered.connect(
                 lambda: self._model.add_edge(selected_nodes[0], selected_nodes[1])
@@ -796,6 +803,8 @@ class _ZoomableGraphicsView(QGraphicsView):
             return
         # Fit-to-view: press F to re-fit the graph to the viewport.
         if event.key() == Qt.Key_F and not self._graph_view.polygon_mode_active:
-            self.fitInView(self.scene().itemsBoundingRect(), Qt.KeepAspectRatio)
+            bounds = self.scene().itemsBoundingRect()
+            if not bounds.isNull():
+                self.fitInView(bounds, Qt.KeepAspectRatio)
             return
         super().keyPressEvent(event)

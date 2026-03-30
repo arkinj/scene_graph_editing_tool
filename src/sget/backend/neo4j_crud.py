@@ -76,6 +76,20 @@ INTERLAYER_EDGE_TYPE = "CONTAINS"
 # ``point()`` function rather than set as raw values).
 POINT3D_PROPERTIES = {"center", "bbox_center", "bbox_dim"}
 
+# Whitelist of allowed property names for dynamic SET clauses in update_node().
+# Property names outside this set are rejected to prevent Cypher injection
+# via user-supplied keys (e.g., from the property panel).
+ALLOWED_PROPERTIES = {
+    "nodeSymbol",
+    "center",
+    "bbox_center",
+    "bbox_dim",
+    "class",
+    "name",
+    "boundary_x",
+    "boundary_y",
+}
+
 
 # ---------------------------------------------------------------------------
 # Node creation — per-layer templates
@@ -289,6 +303,13 @@ def update_node(db: Neo4jWrapper, layer_label: str, node_symbol: str, props: dic
     """
     if not props:
         return
+
+    # Validate property names against whitelist to prevent Cypher injection.
+    # Property names are used directly in f-string query construction (n.{key}),
+    # so untrusted keys could inject arbitrary Cypher.
+    invalid_keys = set(props.keys()) - ALLOWED_PROPERTIES
+    if invalid_keys:
+        raise ValueError(f"Invalid property name(s): {invalid_keys}")
 
     set_clauses = []
     params = {"ns": node_symbol}
