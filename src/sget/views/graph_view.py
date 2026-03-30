@@ -178,7 +178,11 @@ class GraphView(QWidget):
         self._scene = QGraphicsScene(self)
         self._view = _ZoomableGraphicsView(self._scene, self)
         self._view.setRenderHint(self._view.renderHints())
-        self._view.setDragMode(QGraphicsView.RubberBandDrag)
+        # Default to scroll/pan drag.  Hold Shift for rubber-band selection.
+        # Override the grab cursor that ScrollHandDrag sets — the hand icon
+        # makes node selection feel imprecise.
+        self._view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self._view.viewport().setCursor(Qt.ArrowCursor)
 
         # Search bar for filtering nodes by symbol, class, or name.
         self._search_bar = QLineEdit()
@@ -198,6 +202,7 @@ class GraphView(QWidget):
         self._model.layer_visibility_changed.connect(self._on_layer_visibility_changed)
         self._model.node_added.connect(self._on_node_added)
         self._model.node_removed.connect(self._on_node_removed)
+        self._model.node_updated.connect(self._on_node_updated)
         self._model.edge_added.connect(self._on_edge_added)
         self._model.edge_removed.connect(self._on_edge_removed)
         self._model.interlayer_edges_visibility_changed.connect(
@@ -234,8 +239,8 @@ class GraphView(QWidget):
         self._cleanup_polygon_visuals()
         self._polygon_mode_active = False
         self._polygon_vertices = []
-        self._view.setDragMode(QGraphicsView.RubberBandDrag)
-        self._view.setCursor(Qt.ArrowCursor)
+        self._view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self._view.viewport().setCursor(Qt.ArrowCursor)
 
     def _on_polygon_click(self, scene_pos: QPointF):
         """Handle a left-click in polygon mode — place a vertex."""
@@ -382,9 +387,18 @@ class GraphView(QWidget):
         # Draw boundary overlays for Rooms with polygon data.
         self._draw_boundaries()
 
-        # Fit the view to show all items (guard against empty scene).
+        # Set the scene rect much larger than the content so the user can
+        # pan freely even when zoomed out.  Without this, ScrollHandDrag
+        # stops at the edge of the items bounding rect.
         bounds = self._scene.itemsBoundingRect()
         if not bounds.isNull():
+            padded = bounds.adjusted(
+                -bounds.width(),
+                -bounds.height(),
+                bounds.width(),
+                bounds.height(),
+            )
+            self._scene.setSceneRect(padded)
             self._view.fitInView(bounds, Qt.KeepAspectRatio)
 
         # Clear search bar.
@@ -405,6 +419,34 @@ class GraphView(QWidget):
 
         x, y = self._default_position_for_layer(layer_label)
         self._add_node_item(node_symbol, layer_label, props, x, y)
+
+    def _on_node_updated(self, node_symbol: str, layer_label: str):
+        """Update a node's visual position and label after a property edit."""
+        item = self._node_items.get(node_symbol)
+        if item is None:
+            return
+
+        props = self._model.get_node(node_symbol)
+        if props is None:
+            return
+
+        # Update position from the node's center property.
+        center = props.get("center")
+        if center is not None:
+            item.setPos(float(center[0]) * DEFAULT_SCALE, -float(center[1]) * DEFAULT_SCALE)
+
+            # Reposition connected edges to follow the node.
+            for key, edge_item in self._edge_items.items():
+                if node_symbol in key:
+                    from_item = self._node_items.get(edge_item.from_symbol)
+                    to_item = self._node_items.get(edge_item.to_symbol)
+                    if from_item and to_item:
+                        edge_item.setLine(
+                            from_item.pos().x(),
+                            from_item.pos().y(),
+                            to_item.pos().x(),
+                            to_item.pos().y(),
+                        )
 
     def _on_node_removed(self, node_symbol: str, layer_label: str):
         """Remove a single node and its connected edges from the scene."""
@@ -782,6 +824,15 @@ class _ZoomableGraphicsView(QGraphicsView):
             self._graph_view._on_polygon_click(scene_pos)
             return
         super().mousePressEvent(event)
+        # ScrollHandDrag sets a ClosedHandCursor on press — override it.
+        if not self._graph_view.polygon_mode_active:
+            self.viewport().setCursor(Qt.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        # ScrollHandDrag may reset the cursor on release — override again.
+        if not self._graph_view.polygon_mode_active:
+            self.viewport().setCursor(Qt.ArrowCursor)
 
     def mouseDoubleClickEvent(self, event):
         if self._graph_view.polygon_mode_active and event.button() == Qt.LeftButton:
@@ -807,4 +858,14 @@ class _ZoomableGraphicsView(QGraphicsView):
             if not bounds.isNull():
                 self.fitInView(bounds, Qt.KeepAspectRatio)
             return
+        # Hold Shift to switch to rubber-band selection mode.
+        if event.key() == Qt.Key_Shift and not self._graph_view.polygon_mode_active:
+            self.setDragMode(QGraphicsView.RubberBandDrag)
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        # Release Shift to return to scroll/pan mode.
+        if event.key() == Qt.Key_Shift and not self._graph_view.polygon_mode_active:
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.viewport().setCursor(Qt.ArrowCursor)
+        super().keyReleaseEvent(event)

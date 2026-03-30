@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -220,7 +219,12 @@ class PropertyPanel(QWidget):
             updates["class"] = self._widgets["class"].currentText()
 
         if updates:
-            self._model.update_node(self._current_symbol, updates)
+            try:
+                self._model.update_node(self._current_symbol, updates)
+            except Exception as e:
+                from PySide6.QtWidgets import QMessageBox
+
+                QMessageBox.critical(self, "Update Error", str(e))
 
     # ------------------------------------------------------------------
     # Widget helpers
@@ -232,10 +236,15 @@ class PropertyPanel(QWidget):
         return label
 
     def _make_vec3(self, key_prefix: str, values) -> tuple[QWidget, list[QDoubleSpinBox]]:
-        """Create a row of 3 spin boxes for a 3D vector."""
+        """Create a vertical stack of 3 spin boxes for a 3D vector.
+
+        Stacked vertically so the property panel can stay narrow and give
+        more room to the central graph view.
+        """
         container = QWidget()
-        layout = QHBoxLayout(container)
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
 
         spins = []
         for i, axis in enumerate(("x", "y", "z")):

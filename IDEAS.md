@@ -52,6 +52,11 @@ Add a dropdown to the layer panel or a View menu option.
 ### Minimap
 Small overview widget (corner of the graph view or separate dock) showing the full graph at a tiny scale with a rectangle indicating the current viewport. Click the minimap to navigate. Useful for large graphs where zoom makes it hard to maintain spatial orientation. Qt provides `QGraphicsView` which can be pointed at the same scene with a different transform.
 
+## Known Bugs
+
+### Neo4j Database Clears Unexpectedly
+The Neo4j database sometimes empties itself after some amount of time, causing the graph to disappear from SGET. Root cause unknown — could be a Docker container restart, a TTL setting, or an external process clearing the DB. Needs investigation. Workaround: reload the JSON file via File → Open.
+
 ## Deferred
 
 ### 3D Visualization
