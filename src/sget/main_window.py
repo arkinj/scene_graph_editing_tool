@@ -27,6 +27,7 @@ from sget.widgets.add_node_dialog import AddNodeDialog
 from sget.widgets.connection_dialog import ConnectionDialog
 from sget.widgets.group_dialog import GroupDialog
 from sget.widgets.layer_panel import LayerPanel
+from sget.widgets.snapshot_panel import SnapshotPanel
 
 # Minimum seconds between auto-refreshes (prevents rapid-fire on window
 # manager focus events like alt-tabbing quickly).
@@ -60,8 +61,15 @@ class MainWindow(QMainWindow):
         property_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.RightDockWidgetArea, property_dock)
 
+        # --- Right dock (below properties): snapshot panel ---
+        self._snapshot_panel = SnapshotPanel(model, self)
+        snapshot_dock = QDockWidget("Snapshots", self)
+        snapshot_dock.setWidget(self._snapshot_panel)
+        snapshot_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.RightDockWidgetArea, snapshot_dock)
+
         # --- Menu bar ---
-        self._setup_menus(layer_dock, property_dock)
+        self._setup_menus(layer_dock, property_dock, snapshot_dock)
 
         # --- Status bar ---
         self.statusBar().showMessage("Ready")
@@ -73,7 +81,9 @@ class MainWindow(QMainWindow):
         self._model.node_added.connect(lambda *_: self._layer_panel._update_counts())
         self._model.node_removed.connect(lambda *_: self._layer_panel._update_counts())
 
-    def _setup_menus(self, layer_dock: QDockWidget, property_dock: QDockWidget):
+    def _setup_menus(
+        self, layer_dock: QDockWidget, property_dock: QDockWidget, snapshot_dock: QDockWidget
+    ):
         # File menu.
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction("&Open JSON...", self._open_json, "Ctrl+O")
@@ -102,6 +112,7 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(layer_dock.toggleViewAction())
         view_menu.addAction(property_dock.toggleViewAction())
+        view_menu.addAction(snapshot_dock.toggleViewAction())
 
     def _open_json(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -113,6 +124,7 @@ class MainWindow(QMainWindow):
         try:
             self.statusBar().showMessage(f"Loading {path}...")
             self._model.load_from_json(path)
+            self._snapshot_panel.set_snapshot_dir(path)
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
             self.statusBar().showMessage("Load failed")
@@ -223,6 +235,13 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Status bar updates
     # ------------------------------------------------------------------
+
+    def set_snapshot_dir(self, loaded_file_path: str):
+        """Set the snapshot directory from the loaded file path.
+
+        Called by app.py after loading a CLI-specified file.
+        """
+        self._snapshot_panel.set_snapshot_dir(loaded_file_path)
 
     def _on_graph_loaded(self):
         nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)

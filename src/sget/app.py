@@ -99,6 +99,7 @@ def main():
     if args.file:
         try:
             model.load_from_json(args.file)
+            window.set_snapshot_dir(args.file)
         except Exception as e:
             QMessageBox.critical(window, "Load Error", str(e))
 
