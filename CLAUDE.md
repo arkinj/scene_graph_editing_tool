@@ -67,6 +67,11 @@ sget --neo4j-uri neo4j://127.0.0.1:7687 --neo4j-user neo4j --neo4j-password neo4
 # Example DSG for testing
 sget --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
 
+# Run with chat agent (requires heracles_agents + OpenAI key)
+pip install -e ~/software/mit/sget/heracles_agents/[openai]
+export HERACLES_OPENAI_API_KEY='your-key'
+./scripts/launch_with_chat.sh --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
+
 # Lint
 ruff check src/ tests/
 ruff format src/ tests/

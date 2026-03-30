@@ -61,6 +61,9 @@ sget --neo4j-uri neo4j://127.0.0.1:7687 \
 
 # Example DSG for testing
 sget --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
+
+# Run with chat agent (see Chat Agent section below)
+./scripts/launch_with_chat.sh --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
 ```
 
 ### CLI Options
