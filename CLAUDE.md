@@ -28,7 +28,8 @@ src/sget/
 │   └── property_panel.py   # Node property editor with Apply button
 ├── widgets/
 │   ├── layer_panel.py      # Layer visibility toggles + node counts
-│   └── connection_dialog.py # Neo4j connection dialog
+│   ├── connection_dialog.py # Neo4j connection dialog
+│   └── snapshot_panel.py  # Save/restore named scene graph snapshots
 └── utils/
     ├── colors.py           # Per-layer colors, styling — single source of truth for layer order
     └── layout.py           # NetworkX hierarchical layout computation
