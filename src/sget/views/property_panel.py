@@ -180,6 +180,11 @@ class PropertyPanel(QWidget):
             bd_widget, _ = self._make_vec3("bbox_dim", bd)
             self._form_layout.addRow("BBox Size:", bd_widget)
 
+        # --- Boundary (Rooms with polygon data) ---
+        if "boundary_x" in props and "boundary_y" in props:
+            n_verts = len(props["boundary_x"])
+            self._form_layout.addRow("Boundary:", self._make_readonly(f"{n_verts} vertices"))
+
         # --- Apply button ---
         self._apply_btn = QPushButton("Apply")
         self._apply_btn.clicked.connect(self._on_apply)

@@ -82,6 +82,11 @@ class MainWindow(QMainWindow):
         )
         edit_menu.addSeparator()
         edit_menu.addAction("&Group Selected...", self._group_selected, "Ctrl+G")
+        edit_menu.addAction("&Draw Region...", self._draw_region, "Ctrl+R")
+
+        # Set up polygon completion callback — when the polygon tool finishes,
+        # it calls this to open the Group dialog with the captured nodes.
+        self._graph_view._on_polygon_completed = self._on_polygon_completed
 
         # View menu — toggle dock visibility.
         view_menu = self.menuBar().addMenu("&View")
@@ -135,6 +140,37 @@ class MainWindow(QMainWindow):
     def _connect_neo4j(self):
         """Show the connection dialog."""
         ConnectionDialog(self._model, self).exec()
+
+    def _draw_region(self):
+        """Enter polygon drawing mode for spatial region creation."""
+        if self._graph_view.polygon_mode_active:
+            # Already drawing — cancel.
+            self._graph_view.cancel_polygon_mode()
+            self.statusBar().showMessage("Region drawing cancelled")
+            return
+
+        self._graph_view.start_polygon_mode()
+        self.statusBar().showMessage(
+            "Drawing region: click to place vertices, double-click to close, Escape to cancel"
+        )
+
+    def _on_polygon_completed(
+        self, captured_symbols: list[str], boundary: list[tuple[float, float]]
+    ):
+        """Called when the polygon tool finishes — opens Group dialog with captured nodes."""
+        if not captured_symbols:
+            self.statusBar().showMessage("No nodes captured by polygon")
+            return
+
+        self.statusBar().showMessage(f"Captured {len(captured_symbols)} nodes")
+        dialog = GroupDialog(self._model, captured_symbols, self, boundary=boundary)
+        parent_symbol = dialog.execute_group()
+        if parent_symbol:
+            self.statusBar().showMessage(
+                f"Created region {parent_symbol} with {len(captured_symbols)} children"
+            )
+        else:
+            self.statusBar().showMessage("Region creation cancelled")
 
     def _group_selected(self):
         """Show the Group dialog for the currently selected nodes."""
