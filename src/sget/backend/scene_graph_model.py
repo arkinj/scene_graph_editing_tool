@@ -107,6 +107,7 @@ class SceneGraphModel(QObject):
     edge_removed = Signal(str, str, str)
     selection_changed = Signal(list)
     layer_visibility_changed = Signal(str, bool)
+    interlayer_edges_visibility_changed = Signal(bool)
     connection_changed = Signal(bool)
 
     def __init__(self, parent=None):
@@ -131,6 +132,7 @@ class SceneGraphModel(QObject):
         # UI state shared across views.
         self._selected: list[str] = []
         self._layer_visibility: dict[str, bool] = {label: True for label, _ in LAYER_ORDER}
+        self._show_interlayer_edges: bool = False  # Off by default — reduces visual clutter
 
     # ------------------------------------------------------------------
     # Connection management
@@ -246,6 +248,20 @@ class SceneGraphModel(QObject):
                 self._node_layers[ns] = layer_label
 
         self._edges = neo4j_crud.get_all_edges(self._db)
+
+    def refresh_from_db(self):
+        """Re-read all nodes and edges from Neo4j into the cache.
+
+        Use this when an external process (e.g., the chat agent) has modified
+        Neo4j directly.  The model cache and all views will be rebuilt to
+        reflect the current database state.
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        self._refresh_cache()
+        self._selected = []
+        self.graph_loaded.emit()
 
     # ------------------------------------------------------------------
     # Read access (views read from cache, not Neo4j)
@@ -486,6 +502,15 @@ class SceneGraphModel(QObject):
     def get_layer_visibility(self) -> dict[str, bool]:
         """Get visibility state for all layers."""
         return dict(self._layer_visibility)
+
+    @property
+    def show_interlayer_edges(self) -> bool:
+        return self._show_interlayer_edges
+
+    def set_interlayer_edges_visible(self, visible: bool):
+        if self._show_interlayer_edges != visible:
+            self._show_interlayer_edges = visible
+            self.interlayer_edges_visibility_changed.emit(visible)
 
     # ------------------------------------------------------------------
     # Labelspace access (for property panel dropdowns)

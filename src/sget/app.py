@@ -12,6 +12,7 @@ default to heracles' bundled labelspace files.
 """
 
 import argparse
+import os
 import sys
 
 from heracles.utils import get_labelspace
@@ -33,13 +34,13 @@ def parse_args():
     )
     parser.add_argument(
         "--neo4j-user",
-        default="neo4j",
-        help="Neo4j username (default: neo4j)",
+        default=os.environ.get("HERACLES_NEO4J_USERNAME", "neo4j"),
+        help="Neo4j username (default: $HERACLES_NEO4J_USERNAME or 'neo4j')",
     )
     parser.add_argument(
         "--neo4j-password",
-        default="neo4j_pw",
-        help="Neo4j password (default: neo4j_pw)",
+        default=os.environ.get("HERACLES_NEO4J_PASSWORD", "neo4j_pw"),
+        help="Neo4j password (default: $HERACLES_NEO4J_PASSWORD or 'neo4j_pw')",
     )
     parser.add_argument(
         "--neo4j-db",
@@ -98,6 +99,7 @@ def main():
     if args.file:
         try:
             model.load_from_json(args.file)
+            window.set_snapshot_dir(args.file)
         except Exception as e:
             QMessageBox.critical(window, "Load Error", str(e))
 

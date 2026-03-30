@@ -61,6 +61,9 @@ sget --neo4j-uri neo4j://127.0.0.1:7687 \
 
 # Example DSG for testing
 sget --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
+
+# Run with chat agent (see Chat Agent section below)
+./scripts/launch_with_chat.sh --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_dsg.json
 ```
 
 ### CLI Options
@@ -99,6 +102,40 @@ sget --file ~/software/mit/sget/heracles/heracles/examples/scene_graphs/example_
 - **File → Open JSON**: load a scene graph (clears and repopulates Neo4j)
 - **File → Save As JSON**: export current Neo4j state back to JSON via heracles
 - **File → Connect to Neo4j**: change Neo4j credentials without restarting
+- **File → Refresh from DB** (Ctrl+Shift+R): re-read the database into the view (useful after external edits)
+
+## Chat Agent (Natural Language Interface)
+
+SGET can be paired with a chat agent that queries and edits the scene graph via natural language. The agent uses [heracles_agents](../heracles_agents/) to generate Cypher queries against the same Neo4j database.
+
+### Setup
+
+```bash
+# Install heracles_agents with OpenAI support
+pip install -e ~/software/mit/sget/heracles_agents/[openai]
+
+# Set your OpenAI API key
+export HERACLES_OPENAI_API_KEY='your-key'
+```
+
+### Running
+
+```bash
+# Launch SGET + chat agent together
+./scripts/launch_with_chat.sh --file path/to/scene_graph.json
+```
+
+Or run them in separate terminals:
+
+```bash
+# Terminal 1: SGET
+sget --file path/to/scene_graph.json
+
+# Terminal 2: Chat agent
+cd config && python ~/software/mit/sget/heracles_agents/examples/chatdsg/chatdsg.py
+```
+
+In the chat, use **Ctrl+B** to submit messages. The agent can query ("How many objects are in room R1?") and edit ("Add a new box at position 5, 5, 0"). After the agent modifies the graph, press **Ctrl+Shift+R** in SGET to refresh the view.
 
 ## Running Tests
 

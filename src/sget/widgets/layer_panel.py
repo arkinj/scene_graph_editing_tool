@@ -3,11 +3,14 @@ Layer visibility panel.
 
 Shows one row per scene graph layer with a checkbox to toggle visibility
 and a label showing the node count.  Ordered from the top of the hierarchy
-(Buildings) to the bottom (Objects), matching the 2D view's vertical layout.
+(Buildings) to the bottom (Objects), matching the scene graph hierarchy.
 
-The panel reads initial state from the model and listens to ``graph_loaded``
-to refresh counts.  Checkbox changes flow through the model via
-``set_layer_visibility()``, which emits a signal that the graph view picks up.
+Also includes a toggle for interlayer (CONTAINS) edges, which are hidden
+by default to reduce visual clutter in dense graphs.
+
+Checkbox changes flow through the model via ``set_layer_visibility()``
+and ``set_interlayer_edges_visible()``, which emit signals that the graph
+view picks up.
 """
 
 from PySide6.QtCore import Qt
@@ -66,6 +69,17 @@ class LayerPanel(QWidget):
             row.addWidget(count)
 
             layout.addLayout(row)
+
+        # Separator before edge toggle.
+        separator = QLabel("")
+        separator.setFixedHeight(8)
+        layout.addWidget(separator)
+
+        # Interlayer edge toggle — off by default to reduce clutter.
+        self._interlayer_cb = QCheckBox("Show CONTAINS edges")
+        self._interlayer_cb.setChecked(self._model.show_interlayer_edges)
+        self._interlayer_cb.toggled.connect(self._model.set_interlayer_edges_visible)
+        layout.addWidget(self._interlayer_cb)
 
         # Refresh counts when the graph is loaded.
         self._model.graph_loaded.connect(self._update_counts)

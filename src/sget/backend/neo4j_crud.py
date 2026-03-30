@@ -76,6 +76,20 @@ INTERLAYER_EDGE_TYPE = "CONTAINS"
 # ``point()`` function rather than set as raw values).
 POINT3D_PROPERTIES = {"center", "bbox_center", "bbox_dim"}
 
+# Whitelist of allowed property names for dynamic SET clauses in update_node().
+# Property names outside this set are rejected to prevent Cypher injection
+# via user-supplied keys (e.g., from the property panel).
+ALLOWED_PROPERTIES = {
+    "nodeSymbol",
+    "center",
+    "bbox_center",
+    "bbox_dim",
+    "class",
+    "name",
+    "boundary_x",
+    "boundary_y",
+}
+
 
 # ---------------------------------------------------------------------------
 # Node creation — per-layer templates
@@ -149,21 +163,44 @@ def create_mesh_place(db: Neo4jWrapper, node_symbol: str, props: dict):
 
 
 def create_room(db: Neo4jWrapper, node_symbol: str, props: dict):
-    """Create a single Room node.  Required keys: pos_x/y/z, class."""
-    db.execute(
-        f"""
-        CREATE (:{constants.ROOMS} {{
+    """Create a single Room node.
+
+    Required keys: pos_x/y/z, class.
+    Optional keys: boundary_x, boundary_y (lists of floats from polygon tool).
+    """
+    params = {
+        "ns": node_symbol,
+        "pos_x": props["pos_x"],
+        "pos_y": props["pos_y"],
+        "pos_z": props["pos_z"],
+        "cls": props["class"],
+    }
+
+    # Base Cypher — always includes position and class.
+    query = f"""
+        CREATE (n:{constants.ROOMS} {{
             nodeSymbol: $ns,
             center: point({{x: $pos_x, y: $pos_y, z: $pos_z}}),
             class: $cls
         }})
-        """,
-        ns=node_symbol,
-        pos_x=props["pos_x"],
-        pos_y=props["pos_y"],
-        pos_z=props["pos_z"],
-        cls=props["class"],
-    )
+    """
+
+    # Optionally store polygon boundary vertices (from Draw Region tool).
+    # These are flat lists of floats, stored as Neo4j list properties.
+    if "boundary_x" in props and "boundary_y" in props:
+        query = f"""
+            CREATE (n:{constants.ROOMS} {{
+                nodeSymbol: $ns,
+                center: point({{x: $pos_x, y: $pos_y, z: $pos_z}}),
+                class: $cls,
+                boundary_x: $boundary_x,
+                boundary_y: $boundary_y
+            }})
+        """
+        params["boundary_x"] = props["boundary_x"]
+        params["boundary_y"] = props["boundary_y"]
+
+    db.execute(query, **params)
 
 
 def create_building(db: Neo4jWrapper, node_symbol: str, props: dict):
@@ -266,6 +303,13 @@ def update_node(db: Neo4jWrapper, layer_label: str, node_symbol: str, props: dic
     """
     if not props:
         return
+
+    # Validate property names against whitelist to prevent Cypher injection.
+    # Property names are used directly in f-string query construction (n.{key}),
+    # so untrusted keys could inject arbitrary Cypher.
+    invalid_keys = set(props.keys()) - ALLOWED_PROPERTIES
+    if invalid_keys:
+        raise ValueError(f"Invalid property name(s): {invalid_keys}")
 
     set_clauses = []
     params = {"ns": node_symbol}

@@ -42,8 +42,6 @@ LAYER_STYLES = [
 # Quick lookups by different keys.
 STYLE_BY_LABEL = {s.layer_label: s for s in LAYER_STYLES}
 STYLE_BY_ID = {s.layer_id: s for s in LAYER_STYLES}
-STYLE_BY_CATEGORY = {s.category_char: s for s in LAYER_STYLES}
-
 # Selection highlight color.
 SELECTION_COLOR = "#FFD700"  # Gold
 SELECTION_PEN_WIDTH = 3
