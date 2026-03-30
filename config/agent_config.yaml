@@ -1,0 +1,34 @@
+---
+# SGET Chat Agent Configuration
+#
+# This config is used with heracles_agents' chatdsg TUI to provide a
+# natural language interface alongside the SGET visual editor.
+# Both connect to the same Neo4j database.
+#
+# Required environment variables:
+#   HERACLES_OPENAI_API_KEY — OpenAI API key
+#   HERACLES_NEO4J_USERNAME — Neo4j username (default: neo4j)
+#   HERACLES_NEO4J_PASSWORD — Neo4j password (default: neo4j_pw)
+
+client:
+  client_type: openai
+  timeout: 20
+
+model_info:
+  model: gpt-4.1
+  temperature: 0.2
+  seed: 123
+
+agent_info:
+  prompt_settings:
+    base_prompt: agent_prompt.yaml
+
+  tools:
+    - name: run_cypher_query
+      bound_args:
+        dsgdb_conf:
+          dsg_interface_type: heracles
+          uri: neo4j://127.0.0.1:7687
+
+  tool_interface: openai
+  max_iterations: 6

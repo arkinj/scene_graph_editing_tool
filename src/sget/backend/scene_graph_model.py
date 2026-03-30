@@ -249,6 +249,20 @@ class SceneGraphModel(QObject):
 
         self._edges = neo4j_crud.get_all_edges(self._db)
 
+    def refresh_from_db(self):
+        """Re-read all nodes and edges from Neo4j into the cache.
+
+        Use this when an external process (e.g., the chat agent) has modified
+        Neo4j directly.  The model cache and all views will be rebuilt to
+        reflect the current database state.
+        """
+        if self._db is None:
+            raise RuntimeError("Not connected to Neo4j")
+
+        self._refresh_cache()
+        self._selected = []
+        self.graph_loaded.emit()
+
     # ------------------------------------------------------------------
     # Read access (views read from cache, not Neo4j)
     # ------------------------------------------------------------------

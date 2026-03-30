@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction("&Save As JSON...", self._save_json, "Ctrl+Shift+S")
         file_menu.addSeparator()
         file_menu.addAction("&Connect to Neo4j...", self._connect_neo4j)
+        file_menu.addAction("&Refresh from DB", self._refresh_from_db, "Ctrl+Shift+R")
         file_menu.addSeparator()
         file_menu.addAction("&Quit", self.close, "Ctrl+Q")
 
@@ -136,6 +137,20 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Added {node_symbol} ({layer_label})")
         except Exception as e:
             QMessageBox.critical(self, "Add Node Error", str(e))
+
+    def _refresh_from_db(self):
+        """Refresh the model cache from Neo4j.
+
+        Useful when an external process (e.g., the chat agent) has modified
+        the database directly.
+        """
+        try:
+            self._model.refresh_from_db()
+            nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
+            edges = len(self._model.get_edges())
+            self.statusBar().showMessage(f"Refreshed: {nodes} nodes, {edges} edges")
+        except Exception as e:
+            QMessageBox.critical(self, "Refresh Error", str(e))
 
     def _connect_neo4j(self):
         """Show the connection dialog."""
