@@ -709,6 +709,18 @@ class GraphView(QWidget):
             )
             menu.addAction(add_edge_action)
 
+        # "Add as children" — if selection has exactly one higher-layer node
+        # and one or more lower-layer nodes, offer to create CONTAINS edges.
+        if len(selected_nodes) >= 2:
+            parent, children = self._detect_parent_children(selected_nodes)
+            if parent and children:
+                label = f"Add {len(children)} node(s) as children of {parent}"
+                add_children_action = QAction(label, self)
+                add_children_action.triggered.connect(
+                    lambda: self._add_children_to_parent(parent, children)
+                )
+                menu.addAction(add_children_action)
+
         if selected_nodes:
             delete_action = QAction(f"Delete {len(selected_nodes)} Node(s)", self)
             delete_action.triggered.connect(self._delete_selected_nodes)
@@ -740,6 +752,48 @@ class GraphView(QWidget):
             self._delete_selected_nodes()
         elif selected_edges:
             self._delete_selected_edges(selected_edges)
+
+    def _detect_parent_children(self, selected_nodes: list[str]) -> tuple[str | None, list[str]]:
+        """Check if the selection contains one parent and multiple children.
+
+        Returns (parent_symbol, [child_symbols]) if exactly one node is from
+        a higher layer than the rest, or (None, []) if the selection doesn't
+        match this pattern.
+
+        Uses spark_dsg layer IDs: higher ID = more abstract = parent.
+        """
+        from sget.utils.colors import STYLE_BY_LABEL
+
+        # Group by layer ID.
+        layer_ids = {}
+        for ns in selected_nodes:
+            layer_label = self._model.get_node_layer(ns)
+            style = STYLE_BY_LABEL.get(layer_label)
+            if style:
+                layer_ids[ns] = style.layer_id
+
+        if len(set(layer_ids.values())) != 2:
+            # Need exactly two distinct layers.
+            return None, []
+
+        # The higher layer ID is the parent.
+        max_layer = max(layer_ids.values())
+        parents = [ns for ns, lid in layer_ids.items() if lid == max_layer]
+        children = [ns for ns, lid in layer_ids.items() if lid != max_layer]
+
+        if len(parents) != 1:
+            # Need exactly one parent.
+            return None, []
+
+        return parents[0], children
+
+    def _add_children_to_parent(self, parent_symbol: str, child_symbols: list[str]):
+        """Create CONTAINS edges from the parent to each child."""
+        for child_ns in child_symbols:
+            try:
+                self._model.add_edge(parent_symbol, child_ns)
+            except Exception:
+                pass  # Edge may already exist or be invalid.
 
     def _delete_selected_nodes(self):
         """Delete all selected nodes via the model, with confirmation."""
