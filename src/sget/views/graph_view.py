@@ -30,7 +30,7 @@ all feed into the same Group dialog:
 """
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QPen, QPolygonF, QWheelEvent
+from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QWheelEvent
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsLineItem,
@@ -38,7 +38,9 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QLineEdit,
     QMenu,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -158,6 +160,9 @@ class GraphView(QWidget):
         # Edge items keyed by (from_symbol, to_symbol) for lookup on removal.
         self._edge_items: dict[tuple[str, str], EdgeItem] = {}
 
+        # Boundary overlay items for Rooms with polygon data.
+        self._boundary_items: dict[str, QGraphicsPolygonItem] = {}
+
         # Polygon drawing state.
         self._polygon_mode_active = False
         self._polygon_vertices: list[QPointF] = []
@@ -170,8 +175,16 @@ class GraphView(QWidget):
         self._view.setRenderHint(self._view.renderHints())
         self._view.setDragMode(QGraphicsView.RubberBandDrag)
 
+        # Search bar for filtering nodes by symbol, class, or name.
+        self._search_bar = QLineEdit()
+        self._search_bar.setPlaceholderText("Search nodes... (by symbol, class, or name)")
+        self._search_bar.setClearButtonEnabled(True)
+        self._search_bar.textChanged.connect(self._on_search_changed)
+        self._search_bar.returnPressed.connect(self._on_search_enter)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._search_bar)
         layout.addWidget(self._view)
 
         # Connect model signals.
@@ -344,6 +357,7 @@ class GraphView(QWidget):
         self._scene.clear()
         self._node_items = {}
         self._edge_items = {}
+        self._boundary_items = {}
 
         nodes = self._model.get_all_nodes()
         node_layers = {ns: self._model.get_node_layer(ns) for ns in nodes}
@@ -362,8 +376,14 @@ class GraphView(QWidget):
         for edge in edges:
             self._add_edge_item(edge["from_symbol"], edge["to_symbol"], edge["edge_type"])
 
+        # Draw boundary overlays for Rooms with polygon data.
+        self._draw_boundaries()
+
         # Fit the view to show all items.
         self._view.fitInView(self._scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+
+        # Clear search bar.
+        self._search_bar.clear()
 
         # Reconnect selection handler.
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
@@ -498,10 +518,15 @@ class GraphView(QWidget):
     # ------------------------------------------------------------------
 
     def _on_layer_visibility_changed(self, layer_label: str, visible: bool):
-        """Toggle visibility of all nodes and their edges in a layer."""
+        """Toggle visibility of all nodes, edges, and boundaries in a layer."""
         for ns, item in self._node_items.items():
             if item.layer_label == layer_label:
                 item.setVisible(visible)
+
+        # Toggle boundary overlays for Room layer.
+        if layer_label == "Room":
+            for boundary_item in self._boundary_items.values():
+                boundary_item.setVisible(visible)
 
         self._update_edge_visibility()
 
@@ -589,15 +614,129 @@ class GraphView(QWidget):
             self._delete_selected_edges(selected_edges)
 
     def _delete_selected_nodes(self):
-        """Delete all selected nodes via the model."""
+        """Delete all selected nodes via the model, with confirmation."""
         symbols = list(self._model.selected)
+        if not symbols:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Nodes",
+            f"Delete {len(symbols)} node(s) and their edges?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
         for ns in symbols:
             self._model.remove_node(ns)
 
     def _delete_selected_edges(self, edge_items: list[EdgeItem]):
-        """Delete the given edge items via the model."""
+        """Delete the given edge items via the model, with confirmation."""
+        if not edge_items:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Edges",
+            f"Delete {len(edge_items)} edge(s)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
         for item in edge_items:
             self._model.remove_edge(item.from_symbol, item.to_symbol)
+
+    # ------------------------------------------------------------------
+    # Search / filter
+    # ------------------------------------------------------------------
+
+    def _on_search_changed(self, text: str):
+        """Dim nodes that don't match the search text."""
+        if not text:
+            # Restore all to full opacity.
+            for item in self._node_items.values():
+                item.setOpacity(1.0)
+            return
+
+        text_lower = text.lower()
+        for ns, item in self._node_items.items():
+            # Match against nodeSymbol, class, or name.
+            props = self._model.get_node(ns) or {}
+            searchable = f"{ns} {props.get('class', '')} {props.get('name', '')}".lower()
+            item.setOpacity(1.0 if text_lower in searchable else 0.15)
+
+    def _on_search_enter(self):
+        """Select all nodes matching the current search text."""
+        text = self._search_bar.text()
+        if not text:
+            return
+
+        text_lower = text.lower()
+        matching = []
+        for ns, item in self._node_items.items():
+            props = self._model.get_node(ns) or {}
+            searchable = f"{ns} {props.get('class', '')} {props.get('name', '')}".lower()
+            if text_lower in searchable:
+                matching.append(ns)
+
+        self._model.set_selection(matching)
+
+    # ------------------------------------------------------------------
+    # Boundary visualization
+    # ------------------------------------------------------------------
+
+    def _draw_boundaries(self):
+        """Draw polygon boundary overlays for Room nodes that have boundary data."""
+        from heracles import constants as hc
+
+        room_style = STYLE_BY_LABEL.get(hc.ROOMS)
+        room_color = QColor(room_style.color) if room_style else QColor("#EF553B")
+
+        for ns, props in self._model.get_all_nodes().items():
+            if self._model.get_node_layer(ns) != hc.ROOMS:
+                continue
+            if "boundary_x" not in props or "boundary_y" not in props:
+                continue
+
+            bx = props["boundary_x"]
+            by = props["boundary_y"]
+            if len(bx) < 3:
+                continue
+
+            # Convert world coords → scene coords.
+            points = [QPointF(x * DEFAULT_SCALE, -y * DEFAULT_SCALE) for x, y in zip(bx, by)]
+            polygon = QPolygonF(points)
+
+            item = QGraphicsPolygonItem(polygon)
+            fill = QColor(room_color)
+            fill.setAlpha(30)
+            item.setBrush(QBrush(fill))
+            item.setPen(QPen(room_color, 1.5, Qt.DashLine))
+            item.setZValue(-2)  # Behind edges and nodes
+            self._scene.addItem(item)
+            self._boundary_items[ns] = item
+
+            # Respect current Room layer visibility.
+            if not self._model.is_layer_visible(hc.ROOMS):
+                item.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # Export to image
+    # ------------------------------------------------------------------
+
+    def export_to_image(self, path: str):
+        """Render the scene to a PNG file."""
+        rect = self._scene.itemsBoundingRect().adjusted(-20, -20, 20, 20)
+        image = QImage(int(rect.width()), int(rect.height()), QImage.Format_ARGB32)
+        image.fill(Qt.white)
+        painter = QPainter(image)
+        self._scene.render(painter, source=rect)
+        painter.end()
+        image.save(path)
 
 
 class _ZoomableGraphicsView(QGraphicsView):
@@ -654,5 +793,9 @@ class _ZoomableGraphicsView(QGraphicsView):
     def keyPressEvent(self, event):
         if self._graph_view.polygon_mode_active and event.key() == Qt.Key_Escape:
             self._graph_view.cancel_polygon_mode()
+            return
+        # Fit-to-view: press F to re-fit the graph to the viewport.
+        if event.key() == Qt.Key_F and not self._graph_view.polygon_mode_active:
+            self.fitInView(self.scene().itemsBoundingRect(), Qt.KeepAspectRatio)
             return
         super().keyPressEvent(event)

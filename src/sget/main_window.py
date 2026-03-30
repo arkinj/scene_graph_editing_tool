@@ -3,11 +3,14 @@ Main application window.
 
 QMainWindow with 2D graph view as the central widget, layer panel as a left
 dock, property panel as a right dock.  File menu for Open/Save/Connect/Quit,
-Edit menu for Add Node/Delete/Group.  The model is passed in from app.py
-(which handles CLI args and Neo4j connection).
+Edit menu for Add Node/Delete/Group/Draw Region.  The model is passed in
+from app.py (which handles CLI args and Neo4j connection).
 """
 
-from PySide6.QtCore import Qt
+import time
+from collections import Counter
+
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -17,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from sget.backend.scene_graph_model import SceneGraphModel
-from sget.utils.colors import LAYER_STYLES
+from sget.utils.colors import LAYER_STYLES, STYLE_BY_LABEL
 from sget.views.graph_view import GraphView
 from sget.views.property_panel import PropertyPanel
 from sget.widgets.add_node_dialog import AddNodeDialog
@@ -25,11 +28,16 @@ from sget.widgets.connection_dialog import ConnectionDialog
 from sget.widgets.group_dialog import GroupDialog
 from sget.widgets.layer_panel import LayerPanel
 
+# Minimum seconds between auto-refreshes (prevents rapid-fire on window
+# manager focus events like alt-tabbing quickly).
+_AUTO_REFRESH_DEBOUNCE_SECS = 2.0
+
 
 class MainWindow(QMainWindow):
     def __init__(self, model: SceneGraphModel, parent=None):
         super().__init__(parent)
         self._model = model
+        self._last_refresh_time = 0.0
 
         self.setWindowTitle("SGET — Scene Graph Editing Tool")
         self.resize(1200, 800)
@@ -59,6 +67,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
         self._model.graph_loaded.connect(self._on_graph_loaded)
         self._model.connection_changed.connect(self._on_connection_changed)
+        self._model.selection_changed.connect(self._on_selection_changed)
 
         # Update layer counts on node add/remove too.
         self._model.node_added.connect(lambda *_: self._layer_panel._update_counts())
@@ -69,6 +78,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction("&Open JSON...", self._open_json, "Ctrl+O")
         file_menu.addAction("&Save As JSON...", self._save_json, "Ctrl+Shift+S")
+        file_menu.addAction("&Export Image...", self._export_image)
         file_menu.addSeparator()
         file_menu.addAction("&Connect to Neo4j...", self._connect_neo4j)
         file_menu.addAction("&Refresh from DB", self._refresh_from_db, "Ctrl+Shift+R")
@@ -123,6 +133,20 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Save Error", str(e))
             self.statusBar().showMessage("Save failed")
 
+    def _export_image(self):
+        """Export the graph view to a PNG image."""
+        path, _ = QFileDialog.getSaveFileName(self, "Export Image", "", "PNG images (*.png)")
+        if not path:
+            return
+        if not path.endswith(".png"):
+            path += ".png"
+
+        try:
+            self._graph_view.export_to_image(path)
+            self.statusBar().showMessage(f"Exported to {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", str(e))
+
     def _add_node(self):
         """Show the Add Node dialog and create the node if accepted."""
         dialog = AddNodeDialog(self._model, self)
@@ -139,13 +163,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Add Node Error", str(e))
 
     def _refresh_from_db(self):
-        """Refresh the model cache from Neo4j.
-
-        Useful when an external process (e.g., the chat agent) has modified
-        the database directly.
-        """
+        """Refresh the model cache from Neo4j."""
         try:
             self._model.refresh_from_db()
+            self._last_refresh_time = time.monotonic()
             nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
             edges = len(self._model.get_edges())
             self.statusBar().showMessage(f"Refreshed: {nodes} nodes, {edges} edges")
@@ -159,7 +180,6 @@ class MainWindow(QMainWindow):
     def _draw_region(self):
         """Enter polygon drawing mode for spatial region creation."""
         if self._graph_view.polygon_mode_active:
-            # Already drawing — cancel.
             self._graph_view.cancel_polygon_mode()
             self.statusBar().showMessage("Region drawing cancelled")
             return
@@ -201,6 +221,10 @@ class MainWindow(QMainWindow):
         if parent_symbol:
             self.statusBar().showMessage(f"Grouped {len(selected)} nodes under {parent_symbol}")
 
+    # ------------------------------------------------------------------
+    # Status bar updates
+    # ------------------------------------------------------------------
+
     def _on_graph_loaded(self):
         nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
         edges = len(self._model.get_edges())
@@ -209,3 +233,42 @@ class MainWindow(QMainWindow):
     def _on_connection_changed(self, connected: bool):
         status = "Connected to Neo4j" if connected else "Disconnected"
         self.statusBar().showMessage(status)
+
+    def _on_selection_changed(self, selected: list):
+        """Show a layer-grouped summary of the selection in the status bar."""
+        if not selected:
+            return  # Don't clear — let other status messages persist.
+
+        # Count by layer display name.
+        layer_counts = Counter()
+        for ns in selected:
+            layer_label = self._model.get_node_layer(ns)
+            style = STYLE_BY_LABEL.get(layer_label)
+            name = style.display_name if style else (layer_label or "Unknown")
+            layer_counts[name] += 1
+
+        parts = [f"{count} {name}" for name, count in layer_counts.items()]
+        self.statusBar().showMessage(f"Selected: {', '.join(parts)}")
+
+    # ------------------------------------------------------------------
+    # Auto-refresh on window focus
+    # ------------------------------------------------------------------
+
+    def changeEvent(self, event):
+        """Auto-refresh from Neo4j when the window gains focus.
+
+        This makes the chat agent workflow seamless — edit in the terminal,
+        alt-tab to SGET, and the view updates automatically.  Debounced to
+        avoid rapid-fire refreshes on window manager events.
+        """
+        super().changeEvent(event)
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            if not self._model.connected:
+                return
+            now = time.monotonic()
+            if now - self._last_refresh_time >= _AUTO_REFRESH_DEBOUNCE_SECS:
+                try:
+                    self._model.refresh_from_db()
+                    self._last_refresh_time = now
+                except Exception:
+                    pass  # Silently ignore — manual refresh is always available.
