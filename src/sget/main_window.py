@@ -83,6 +83,10 @@ class MainWindow(QMainWindow):
         # Wire the lock/unlock toggle to the graph view.
         self._layer_panel._lock_cb.toggled.connect(self._graph_view.set_positions_locked)
 
+        # Wire layer panel buttons to the same actions as the Edit menu.
+        self._layer_panel._add_btn.clicked.connect(self._add_node)
+        self._layer_panel._delete_btn.clicked.connect(self._graph_view.delete_selected)
+
     def _setup_menus(
         self, layer_dock: QDockWidget, property_dock: QDockWidget, snapshot_dock: QDockWidget
     ):

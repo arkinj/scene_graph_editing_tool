@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +39,14 @@ class LayerPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignTop)
+
+        # Quick-access buttons for common editing operations.
+        btn_row = QHBoxLayout()
+        self._add_btn = QPushButton("Add Node")
+        self._delete_btn = QPushButton("Delete")
+        btn_row.addWidget(self._add_btn)
+        btn_row.addWidget(self._delete_btn)
+        layout.addLayout(btn_row)
 
         for style in LAYER_STYLES:
             row = QHBoxLayout()
