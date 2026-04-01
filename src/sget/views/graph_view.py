@@ -760,29 +760,32 @@ class GraphView(QWidget):
         a higher layer than the rest, or (None, []) if the selection doesn't
         match this pattern.
 
-        Uses spark_dsg layer IDs: higher ID = more abstract = parent.
+        Uses position in LAYER_STYLES (not raw layer IDs) to determine
+        hierarchy.  LAYER_STYLES is ordered from most abstract (Buildings,
+        index 0) to most concrete (Objects, index 4).  Lower index = parent.
+        This is necessary because MeshPlaces has layer_id=20 but sits below
+        Rooms (layer_id=4) in the hierarchy.
         """
-        from sget.utils.colors import STYLE_BY_LABEL
+        from sget.utils.colors import LAYER_STYLES
 
-        # Group by layer ID.
-        layer_ids = {}
+        # Hierarchy rank: lower index in LAYER_STYLES = more abstract = parent.
+        rank_by_label = {s.layer_label: i for i, s in enumerate(LAYER_STYLES)}
+
+        node_ranks = {}
         for ns in selected_nodes:
             layer_label = self._model.get_node_layer(ns)
-            style = STYLE_BY_LABEL.get(layer_label)
-            if style:
-                layer_ids[ns] = style.layer_id
+            if layer_label in rank_by_label:
+                node_ranks[ns] = rank_by_label[layer_label]
 
-        if len(set(layer_ids.values())) != 2:
-            # Need exactly two distinct layers.
+        if len(set(node_ranks.values())) != 2:
             return None, []
 
-        # The higher layer ID is the parent.
-        max_layer = max(layer_ids.values())
-        parents = [ns for ns, lid in layer_ids.items() if lid == max_layer]
-        children = [ns for ns, lid in layer_ids.items() if lid != max_layer]
+        # Lower rank = more abstract = parent.
+        min_rank = min(node_ranks.values())
+        parents = [ns for ns, rank in node_ranks.items() if rank == min_rank]
+        children = [ns for ns, rank in node_ranks.items() if rank != min_rank]
 
         if len(parents) != 1:
-            # Need exactly one parent.
             return None, []
 
         return parents[0], children
