@@ -112,8 +112,11 @@ class MainWindow(QMainWindow):
         # When the polygon drawing tool completes, open the Group dialog.
         self._graph_view.polygon_completed.connect(self._on_polygon_completed)
 
-        # View menu — toggle dock visibility.
+        # View menu — toggle dock visibility + focus.
         view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction("&Focus on Subtree", self._focus_on_subtree, "Ctrl+F")
+        view_menu.addAction("Show &All", self._show_all, "Escape")
+        view_menu.addSeparator()
         view_menu.addAction(layer_dock.toggleViewAction())
         view_menu.addAction(property_dock.toggleViewAction())
         view_menu.addAction(snapshot_dock.toggleViewAction())
@@ -239,6 +242,31 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Status bar updates
     # ------------------------------------------------------------------
+
+    def _focus_on_subtree(self):
+        """Focus the view on the selected node's subtree (descendants)."""
+        selected = self._model.selected
+        if len(selected) != 1:
+            QMessageBox.information(
+                self, "Focus", "Select exactly one node to focus on its subtree."
+            )
+            return
+
+        node_symbol = selected[0]
+        descendants = self._model.get_descendants(node_symbol)
+        if not descendants:
+            QMessageBox.information(self, "Focus", f"{node_symbol} has no children to focus on.")
+            return
+
+        self._graph_view.focus_on_node(node_symbol)
+        self.statusBar().showMessage(f"Focused on {node_symbol} ({len(descendants) + 1} nodes)")
+
+    def _show_all(self):
+        """Restore the full graph view after a focus."""
+        if self._graph_view.is_focused:
+            self._graph_view.clear_focus()
+            nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
+            self.statusBar().showMessage(f"Showing all {nodes} nodes")
 
     def set_snapshot_dir(self, loaded_file_path: str):
         """Set the snapshot directory and track the current file.

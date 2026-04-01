@@ -197,6 +197,9 @@ class GraphView(QWidget):
         # Boundary overlay items for Rooms with polygon data.
         self._boundary_items: dict[str, QGraphicsPolygonItem] = {}
 
+        # Focused subtree state — when set, only these nodes are visible.
+        self._focused_set: set[str] | None = None
+
         # Polygon drawing state.
         self._polygon_mode_active = False
         self._polygon_vertices: list[QPointF] = []
@@ -217,6 +220,7 @@ class GraphView(QWidget):
         self._search_bar = QLineEdit()
         self._search_bar.setPlaceholderText("Search nodes... (by symbol, class, or name)")
         self._search_bar.setClearButtonEnabled(True)
+        self._search_bar.setFocusPolicy(Qt.ClickFocus)  # Only focus when clicked, not on startup.
         self._search_bar.textChanged.connect(self._on_search_changed)
         self._search_bar.returnPressed.connect(self._on_search_enter)
 
@@ -379,6 +383,54 @@ class GraphView(QWidget):
             if polygon.containsPoint(item.pos(), Qt.OddEvenFill):
                 captured.append(ns)
         return captured
+
+    # ------------------------------------------------------------------
+    # Focus on subtree
+    # ------------------------------------------------------------------
+
+    def focus_on_node(self, node_symbol: str):
+        """Show only the selected node and its descendants, hiding everything else.
+
+        Traverses CONTAINS edges transitively to find all children,
+        grandchildren, etc.  The focused node itself is also shown.
+        Edges between visible nodes remain; all others are hidden.
+        """
+        descendants = self._model.get_descendants(node_symbol)
+        visible_set = descendants | {node_symbol}
+        self._focused_set = visible_set
+
+        for ns, item in self._node_items.items():
+            item.setVisible(ns in visible_set)
+
+        self._update_edge_visibility()
+
+        # Don't refit — keep the current zoom/pan so the transition
+        # isn't disorienting.  The user can press F to fit if desired.
+
+    def clear_focus(self):
+        """Restore all nodes to visibility (respecting layer toggles).
+
+        Undoes a previous ``focus_on_node`` call.
+        """
+        self._focused_set = None
+
+        # Restore visibility based on layer toggles.
+        for ns, item in self._node_items.items():
+            layer_visible = self._model.is_layer_visible(item.layer_label)
+            item.setVisible(layer_visible)
+
+        # Also restore boundary items.
+        from heracles import constants as hc
+
+        rooms_visible = self._model.is_layer_visible(hc.ROOMS)
+        for boundary_item in self._boundary_items.values():
+            boundary_item.setVisible(rooms_visible)
+
+        self._update_edge_visibility()
+
+    @property
+    def is_focused(self) -> bool:
+        return self._focused_set is not None
 
     # ------------------------------------------------------------------
     # Position lock / unlock (drag-to-reposition)
@@ -646,10 +698,18 @@ class GraphView(QWidget):
     # ------------------------------------------------------------------
 
     def _on_layer_visibility_changed(self, layer_label: str, visible: bool):
-        """Toggle visibility of all nodes, edges, and boundaries in a layer."""
+        """Toggle visibility of all nodes, edges, and boundaries in a layer.
+
+        Respects the focused subtree — if a focus is active, only nodes in
+        the focused set can become visible.
+        """
         for ns, item in self._node_items.items():
             if item.layer_label == layer_label:
-                item.setVisible(visible)
+                if visible and self._focused_set is not None:
+                    # Only show if the node is in the focused subtree.
+                    item.setVisible(ns in self._focused_set)
+                else:
+                    item.setVisible(visible)
 
         # Toggle boundary overlays for Room layer.
         from heracles import constants as hc
@@ -693,7 +753,9 @@ class GraphView(QWidget):
     def _show_context_menu(self, pos):
         """Show a context menu with available actions based on selection.
 
-        Called by the ZoomableGraphicsView on right-click.
+        Called by the ZoomableGraphicsView on right-click.  If both nodes and
+        edges are selected (common with rubber-band), we prioritize nodes so
+        that "Add as children" and other node operations appear cleanly.
         """
         menu = QMenu(self)
 
@@ -703,6 +765,12 @@ class GraphView(QWidget):
         selected_edges = [
             item for item in self._scene.selectedItems() if isinstance(item, EdgeItem)
         ]
+
+        # Prioritize nodes over edges — deselect edges if nodes are present.
+        if selected_nodes and selected_edges:
+            for edge_item in selected_edges:
+                edge_item.setSelected(False)
+            selected_edges = []
 
         if len(selected_nodes) == 2 and selected_nodes[0] != selected_nodes[1]:
             add_edge_action = QAction("Add Edge", self)
