@@ -25,6 +25,7 @@ back to [x, y, z] lists for ``model.update_node()``.
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -51,6 +52,7 @@ class PropertyPanel(QWidget):
     def __init__(self, model: SceneGraphModel, parent: QWidget | None = None):
         super().__init__(parent)
         self._model = model
+        self._graph_view = None  # Set by MainWindow after construction.
         self._current_symbol: str | None = None
 
         # Outer layout with scroll area — the form can grow tall for Objects.
@@ -137,10 +139,20 @@ class PropertyPanel(QWidget):
             "Layer:", self._make_readonly(style.display_name if style else layer_label)
         )
 
-        # --- Position (all nodes have this) ---
+        # --- Lock toggle (controls whether the node can be dragged) ---
+        if self._graph_view is not None:
+            locked = self._graph_view.is_node_locked(node_symbol)
+            lock_cb = QCheckBox("Locked")
+            lock_cb.setChecked(locked)
+            lock_cb.toggled.connect(
+                lambda checked, ns=node_symbol: self._graph_view.set_node_locked(ns, checked)
+            )
+            self._form_layout.addRow("Position:", lock_cb)
+
+        # --- Position fields ---
         center = props.get("center", [0, 0, 0])
         pos_widget, pos_spins = self._make_vec3("pos", center)
-        self._form_layout.addRow("Position:", pos_widget)
+        self._form_layout.addRow("", pos_widget)
 
         # --- Name (Objects have this, may be empty string) ---
         if "name" in props:

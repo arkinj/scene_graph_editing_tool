@@ -100,12 +100,23 @@ class NodeItem(QGraphicsEllipseItem):
         # Enable geometry change notifications so we can update edges during drag.
         self.setFlag(QGraphicsEllipseItem.ItemSendsGeometryChanges, True)
 
+        # Per-node lock state — locked by default (not draggable).
+        self._locked = True
+
         # Text label below the circle.
         self._label = QGraphicsSimpleTextItem(display_text, self)
         self._label.setPos(-r, r + 2)
         font = self._label.font()
         font.setPointSize(7)
         self._label.setFont(font)
+
+    @property
+    def locked(self) -> bool:
+        return self._locked
+
+    def set_locked(self, locked: bool):
+        self._locked = locked
+        self.setFlag(QGraphicsEllipseItem.ItemIsMovable, not locked)
 
     def set_highlighted(self, highlighted: bool):
         """Toggle selection highlight."""
@@ -185,10 +196,6 @@ class GraphView(QWidget):
 
         # Boundary overlay items for Rooms with polygon data.
         self._boundary_items: dict[str, QGraphicsPolygonItem] = {}
-
-        # Position lock state.  When locked (default), nodes cannot be
-        # dragged.  Unlocked allows drag-to-reposition with live edge updates.
-        self._positions_locked = True
 
         # Polygon drawing state.
         self._polygon_mode_active = False
@@ -377,20 +384,16 @@ class GraphView(QWidget):
     # Position lock / unlock (drag-to-reposition)
     # ------------------------------------------------------------------
 
-    @property
-    def positions_locked(self) -> bool:
-        return self._positions_locked
+    def set_node_locked(self, node_symbol: str, locked: bool):
+        """Lock or unlock a specific node's position."""
+        item = self._node_items.get(node_symbol)
+        if item:
+            item.set_locked(locked)
 
-    def set_positions_locked(self, locked: bool):
-        """Toggle whether nodes can be dragged to reposition them.
-
-        When unlocked, nodes get the ItemIsMovable flag and can be dragged.
-        On drag release, the new position is written to Neo4j via the model.
-        When locked (default), nodes are not draggable.
-        """
-        self._positions_locked = locked
-        for item in self._node_items.values():
-            item.setFlag(QGraphicsEllipseItem.ItemIsMovable, not locked)
+    def is_node_locked(self, node_symbol: str) -> bool:
+        """Check whether a node is position-locked."""
+        item = self._node_items.get(node_symbol)
+        return item.locked if item else True
 
     def _update_edges_for_node(self, node_symbol: str):
         """Reposition all edges connected to a node (called during drag)."""
@@ -560,8 +563,7 @@ class GraphView(QWidget):
             display = f"{ns}\n{props['class']}"
 
         item = NodeItem(ns, layer_label, display, x, y)
-        # Apply current lock state.
-        item.setFlag(QGraphicsEllipseItem.ItemIsMovable, not self._positions_locked)
+        # New nodes default to locked (not draggable).
         self._scene.addItem(item)
         self._node_items[ns] = item
 
@@ -965,11 +967,10 @@ class _ZoomableGraphicsView(QGraphicsView):
             self.viewport().setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
-        # If positions are unlocked, commit any dragged node positions to the model.
-        if not self._graph_view.positions_locked:
-            for item in self.scene().selectedItems():
-                if isinstance(item, NodeItem):
-                    self._graph_view.commit_node_position(item.node_symbol)
+        # Commit positions for any unlocked nodes that were dragged.
+        for item in self.scene().selectedItems():
+            if isinstance(item, NodeItem) and not item.locked:
+                self._graph_view.commit_node_position(item.node_symbol)
 
         super().mouseReleaseEvent(event)
         # ScrollHandDrag may reset the cursor on release — override again.

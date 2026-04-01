@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
 
         # --- Right dock: property panel ---
         self._property_panel = PropertyPanel(model, self)
+        self._property_panel._graph_view = self._graph_view
         property_dock = QDockWidget("Properties", self)
         property_dock.setWidget(self._property_panel)
         property_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
@@ -79,9 +80,6 @@ class MainWindow(QMainWindow):
         # Update layer counts on node add/remove too.
         self._model.node_added.connect(lambda *_: self._layer_panel._update_counts())
         self._model.node_removed.connect(lambda *_: self._layer_panel._update_counts())
-
-        # Wire the lock/unlock toggle to the graph view.
-        self._layer_panel._lock_cb.toggled.connect(self._graph_view.set_positions_locked)
 
         # Wire layer panel buttons to the same actions as the Edit menu.
         self._layer_panel._add_btn.clicked.connect(self._add_node)
