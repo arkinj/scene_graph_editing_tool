@@ -7,10 +7,9 @@ Edit menu for Add Node/Delete/Group/Draw Region.  The model is passed in
 from app.py (which handles CLI args and Neo4j connection).
 """
 
-import time
 from collections import Counter
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -29,16 +28,12 @@ from sget.widgets.group_dialog import GroupDialog
 from sget.widgets.layer_panel import LayerPanel
 from sget.widgets.snapshot_panel import SnapshotPanel
 
-# Minimum seconds between auto-refreshes (prevents rapid-fire on window
-# manager focus events like alt-tabbing quickly).
-_AUTO_REFRESH_DEBOUNCE_SECS = 2.0
-
 
 class MainWindow(QMainWindow):
     def __init__(self, model: SceneGraphModel, parent=None):
         super().__init__(parent)
         self._model = model
-        self._last_refresh_time = 0.0
+        self._current_file: str | None = None
 
         self.setWindowTitle("SGET — Scene Graph Editing Tool")
         self.resize(1200, 800)
@@ -55,7 +50,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, layer_dock)
 
         # --- Right dock: property panel ---
-        self._property_panel = PropertyPanel(model, self)
+        self._property_panel = PropertyPanel(model, graph_view=self._graph_view, parent=self)
         property_dock = QDockWidget("Properties", self)
         property_dock.setWidget(self._property_panel)
         property_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
@@ -71,6 +66,10 @@ class MainWindow(QMainWindow):
         # --- Menu bar ---
         self._setup_menus(layer_dock, property_dock, snapshot_dock)
 
+        # Set initial dock widths — wide enough for comboboxes but user can
+        # resize freely afterward (no minimum constraint).
+        self.resizeDocks([property_dock], [250], Qt.Horizontal)
+
         # --- Status bar ---
         self.statusBar().showMessage("Ready")
         self._model.graph_loaded.connect(self._on_graph_loaded)
@@ -80,6 +79,10 @@ class MainWindow(QMainWindow):
         # Update layer counts on node add/remove too.
         self._model.node_added.connect(lambda *_: self._layer_panel._update_counts())
         self._model.node_removed.connect(lambda *_: self._layer_panel._update_counts())
+
+        # Wire layer panel buttons to the same actions as the Edit menu.
+        self._layer_panel._add_btn.clicked.connect(self._add_node)
+        self._layer_panel._delete_btn.clicked.connect(self._graph_view.delete_selected)
 
     def _setup_menus(
         self, layer_dock: QDockWidget, property_dock: QDockWidget, snapshot_dock: QDockWidget
@@ -108,8 +111,11 @@ class MainWindow(QMainWindow):
         # When the polygon drawing tool completes, open the Group dialog.
         self._graph_view.polygon_completed.connect(self._on_polygon_completed)
 
-        # View menu — toggle dock visibility.
+        # View menu — toggle dock visibility + focus.
         view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction("&Focus on Subtree", self._focus_on_subtree, "Ctrl+F")
+        view_menu.addAction("Show &All", self._show_all, "Escape")
+        view_menu.addSeparator()
         view_menu.addAction(layer_dock.toggleViewAction())
         view_menu.addAction(property_dock.toggleViewAction())
         view_menu.addAction(snapshot_dock.toggleViewAction())
@@ -124,6 +130,7 @@ class MainWindow(QMainWindow):
         try:
             self.statusBar().showMessage(f"Loading {path}...")
             self._model.load_from_json(path)
+            self._current_file = path
             self._snapshot_panel.set_snapshot_dir(path)
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
@@ -177,7 +184,6 @@ class MainWindow(QMainWindow):
         """Refresh the model cache from Neo4j."""
         try:
             self._model.refresh_from_db()
-            self._last_refresh_time = time.monotonic()
             nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
             edges = len(self._model.get_edges())
             self.statusBar().showMessage(f"Refreshed: {nodes} nodes, {edges} edges")
@@ -236,17 +242,52 @@ class MainWindow(QMainWindow):
     # Status bar updates
     # ------------------------------------------------------------------
 
+    def _focus_on_subtree(self):
+        """Focus the view on the selected node's subtree (descendants)."""
+        selected = self._model.selected
+        if len(selected) != 1:
+            QMessageBox.information(
+                self, "Focus", "Select exactly one node to focus on its subtree."
+            )
+            return
+
+        node_symbol = selected[0]
+        descendants = self._model.get_descendants(node_symbol)
+        if not descendants:
+            QMessageBox.information(self, "Focus", f"{node_symbol} has no children to focus on.")
+            return
+
+        self._graph_view.focus_on_node(node_symbol)
+        self.statusBar().showMessage(f"Focused on {node_symbol} ({len(descendants) + 1} nodes)")
+
+    def _show_all(self):
+        """Restore the full graph view after a focus."""
+        if self._graph_view.is_focused:
+            self._graph_view.clear_focus()
+            nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
+            self.statusBar().showMessage(f"Showing all {nodes} nodes")
+
     def set_snapshot_dir(self, loaded_file_path: str):
-        """Set the snapshot directory from the loaded file path.
+        """Set the snapshot directory and track the current file.
 
         Called by app.py after loading a CLI-specified file.
         """
+        self._current_file = loaded_file_path
         self._snapshot_panel.set_snapshot_dir(loaded_file_path)
 
     def _on_graph_loaded(self):
         nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
         edges = len(self._model.get_edges())
         self.statusBar().showMessage(f"Loaded: {nodes} nodes, {edges} edges")
+
+        # Show the filename in the window title.
+        if self._current_file:
+            import os
+
+            basename = os.path.basename(self._current_file)
+            self.setWindowTitle(f"{basename} — SGET")
+        else:
+            self.setWindowTitle("SGET — Scene Graph Editing Tool")
 
     def _on_connection_changed(self, connected: bool):
         status = "Connected to Neo4j" if connected else "Disconnected"
@@ -272,21 +313,6 @@ class MainWindow(QMainWindow):
     # Auto-refresh on window focus
     # ------------------------------------------------------------------
 
-    def changeEvent(self, event):
-        """Auto-refresh from Neo4j when the window gains focus.
-
-        This makes the chat agent workflow seamless — edit in the terminal,
-        alt-tab to SGET, and the view updates automatically.  Debounced to
-        avoid rapid-fire refreshes on window manager events.
-        """
-        super().changeEvent(event)
-        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
-            if not self._model.connected:
-                return
-            now = time.monotonic()
-            if now - self._last_refresh_time >= _AUTO_REFRESH_DEBOUNCE_SECS:
-                try:
-                    self._model.refresh_from_db()
-                    self._last_refresh_time = now
-                except Exception:
-                    self.statusBar().showMessage("Auto-refresh failed (Ctrl+Shift+R to retry)")
+    # Auto-refresh on window focus was removed — it caused the graph to
+    # disappear unexpectedly (e.g., if Neo4j state changed between focus
+    # events).  Use Ctrl+Shift+R to refresh manually instead.

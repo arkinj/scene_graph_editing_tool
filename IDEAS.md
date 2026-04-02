@@ -1,44 +1,33 @@
 # SGET Feature Ideas
 
 Potential features for future development, roughly ordered by impact.
+Items marked with [DONE] have been implemented.
 
-## High Value, Low Effort
+## Implemented
 
-### Fit-to-View Keyboard Shortcut
-Press `F` to re-fit the graph view after zooming/panning too far. Currently easy to lose your place in a large graph. Implementation: call `_view.fitInView(scene.itemsBoundingRect(), Qt.KeepAspectRatio)` on keypress.
+- [DONE] **Fit-to-view shortcut** — press `F` to re-fit the graph
+- [DONE] **Status bar selection summary** — "Selected: 3 Objects, 1 Room"
+- [DONE] **Delete confirmation dialog** — prompts before deleting
+- [DONE] **Boundary visualization** — Room polygon overlays
+- [DONE] **Search / filter** — text field dims non-matching nodes, Enter selects matches
+- [DONE] **Export to image** — File → Export Image (PNG)
+- [DONE] **Drag-to-reposition** — per-node lock/unlock in property panel
+- [DONE] **Add Node / Delete buttons** — quick-access in left panel
+- [DONE] **Add as children** — right-click to assign child nodes to a parent
+- [DONE] **Snapshots** — save/restore named states in `.sget_snapshots/`
+- [DONE] **Chat agent integration** — heracles_agents TUI alongside SGET
 
-### Status Bar Selection Summary
-Show "Selected: 3 Objects, 1 Room" in the status bar instead of just highlighting nodes. Useful context before grouping or deleting. Wire to `selection_changed` signal.
+## High Value
 
-### Delete Confirmation Dialog
-Currently the Delete key removes nodes immediately with no undo. A "Delete 5 nodes and their edges?" confirmation prompt would prevent accidental data loss. Simple `QMessageBox.question()` in `delete_selected()`.
+### Focus on Subtree
+Select a Room/Region node → View → Focus (or double-click) → the view hides all nodes except the selected node's descendants (children, grandchildren, etc.). For example, selecting a Room would show only its child Places/MeshPlaces and grandchild Objects. A "Show All" button or Escape returns to the full graph. Implementation:
+- Query the model for all descendants of the selected node via CONTAINS edges (transitive)
+- Hide all NodeItems not in the descendant set
+- Optionally re-fit the view to the visible subset
+- Status bar: "Focused on R1 (42 nodes)"
 
-## High Value, Moderate Effort
-
-### Boundary Visualization
-Render Room polygon boundaries as persistent semi-transparent overlays on the graph view. We already store `boundary_x`/`boundary_y` on Room nodes but don't visualize them after creation. On `graph_loaded`, iterate Room nodes with boundary data and create `QGraphicsPolygonItem` overlays. Toggle visibility with the Room layer checkbox.
-
-### Search / Filter
-A text field (top of the graph view or in a toolbar) to search for nodes by symbol, class, or name. Matching nodes highlighted, non-matching dimmed. With 166+ nodes, finding a specific one by clicking is tedious. Could also filter the graph to show only matching nodes.
-
-### Auto-Refresh from DB
-Detect when the chat agent (or another external process) modifies Neo4j, and refresh SGET's cache automatically. Options:
-- Poll Neo4j on a timer (e.g., every 5 seconds, compare node count)
-- Refresh on window focus (`QWidget.focusInEvent`)
-- File-based signal (agent writes a trigger file, SGET watches with `QFileSystemWatcher`)
-
-Window focus is the simplest and least intrusive.
-
-## Medium Value, Higher Effort
-
-### Undo/Redo
-Wrap all model mutations in `QUndoCommand` subclasses and push onto a `QUndoStack`. Every mutation already flows through the model's `add_node`/`remove_node`/`update_node`/`add_edge`/`remove_edge` methods, so the wiring points are clear. Each command stores enough state to reverse itself (e.g., `RemoveNodeCommand` saves the full node properties and connected edges for restoration).
-
-### Batch Property Editing
-Select multiple nodes and change a property on all of them at once. Example: select 10 objects classified as "unknown" and reclassify them all as "tree". The property panel would show shared properties when multiple nodes of the same layer are selected, with an "Apply to All" button.
-
-### Export to Image
-Save the current graph view as PNG or SVG for papers and presentations. `QGraphicsScene.render()` to a `QPainter` on a `QImage` or `QSvgGenerator`. Add File → Export Image menu action.
+### Additive Rubber-Band Selection
+Hold Shift and drag to add nodes to the current selection instead of replacing it. Needs interactive debugging — Qt's `RubberBandDrag` clears the scene selection before applying, which makes the merge timing tricky. Attempted and reverted; revisit with live pair-debugging.
 
 ### Node Color Modes
 Toggle coloring by different attributes instead of always by layer:
@@ -49,10 +38,26 @@ Toggle coloring by different attributes instead of always by layer:
 
 Add a dropdown to the layer panel or a View menu option.
 
+### Batch Property Editing
+Select multiple nodes and change a property on all of them at once. Example: select 10 objects classified as "unknown" and reclassify them all as "tree". The property panel would show shared properties when multiple nodes of the same layer are selected, with an "Apply to All" button.
+
+## Medium Value
+
+### Undo/Redo
+Wrap all model mutations in `QUndoCommand` subclasses and push onto a `QUndoStack`. Every mutation already flows through the model's `add_node`/`remove_node`/`update_node`/`add_edge`/`remove_edge` methods, so the wiring points are clear. Each command stores enough state to reverse itself (e.g., `RemoveNodeCommand` saves the full node properties and connected edges for restoration).
+
 ### Minimap
-Small overview widget (corner of the graph view or separate dock) showing the full graph at a tiny scale with a rectangle indicating the current viewport. Click the minimap to navigate. Useful for large graphs where zoom makes it hard to maintain spatial orientation. Qt provides `QGraphicsView` which can be pointed at the same scene with a different transform.
+Small overview widget (corner of the graph view or separate dock) showing the full graph at a tiny scale with a rectangle indicating the current viewport. Click the minimap to navigate. Useful for large graphs where zoom makes it hard to maintain spatial orientation.
+
+### Auto-Refresh from DB
+Detect when the chat agent modifies Neo4j and refresh automatically. Previous implementation (window focus refresh) was removed because it caused the graph to disappear. Could revisit with a smarter approach (compare node counts before refreshing, or only refresh if the DB was actually modified). Manual Ctrl+Shift+R works for now.
+
+## Known Bugs
+
+### Neo4j Database Clears Unexpectedly
+The Neo4j database sometimes empties itself after some amount of time, causing the graph to disappear from SGET. Root cause unknown — could be a Docker container restart, a TTL setting, or an external process clearing the DB. Workaround: reload the JSON file via File → Open, or restore a snapshot.
 
 ## Deferred
 
 ### 3D Visualization
-Add a 3D viewport using PyVista/pyvistaqt alongside the 2D view. The original plan included this but it was deferred to focus on the 2D editing workflow. Would show nodes at their true 3D positions with bounding boxes and allow 3D picking.
+Add a 3D viewport using PyVista/pyvistaqt alongside the 2D view. The original plan included this but it was deferred to focus on the 2D editing workflow.

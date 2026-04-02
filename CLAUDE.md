@@ -24,25 +24,36 @@ src/sget/
 │   ├── neo4j_crud.py       # Single-node/edge CRUD on Neo4j
 │   └── scene_graph_model.py # Central model: cache, Qt signals, selection
 ├── views/
-│   ├── graph_view.py       # QGraphicsView 2D hierarchical graph
-│   └── property_panel.py   # Node property editor with Apply button
+│   ├── graph_view.py       # QGraphicsView 2D spatial graph, polygon tool, focus, search
+│   └── property_panel.py   # Node property editor with Apply button + lock toggle
 ├── widgets/
-│   ├── layer_panel.py      # Layer visibility toggles + node counts
-│   └── connection_dialog.py # Neo4j connection dialog
+│   ├── layer_panel.py      # Layer visibility toggles, node counts, Add/Delete buttons
+│   ├── add_node_dialog.py  # Dialog for creating new nodes
+│   ├── group_dialog.py     # Dialog for grouping nodes under a parent
+│   ├── connection_dialog.py # Neo4j connection dialog
+│   └── snapshot_panel.py   # Save/restore named scene graph snapshots
 └── utils/
     ├── colors.py           # Per-layer colors, styling — single source of truth for layer order
-    └── layout.py           # NetworkX hierarchical layout computation
+    └── layout.py           # Spatial layout: x,-y projection from 3D node positions
 tests/
-├── test_neo4j_crud.py       # CRUD tests against live Neo4j
-├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility
-└── test_placeholder.py       # Import smoke test
+├── test_neo4j_crud.py       # CRUD tests against live Neo4j (23 tests)
+├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility (24 tests)
+config/
+├── agent_config.yaml        # Chat agent config (OpenAI + Cypher tool)
+├── agent_prompt.yaml        # Chat agent prompt with read+write Cypher examples
+scripts/
+├── launch_with_chat.sh      # Launches SGET + heracles_agents chat TUI side by side
 ```
 
 ## Architecture Notes
 - **Single source of truth for layer config**: `utils/colors.py` defines `LAYER_STYLES` (order, colors, IDs, labels). `scene_graph_model.py` derives `LAYER_ORDER` from it. Don't define layer lists elsewhere.
 - **Data flow**: JSON → spark_dsg (transient) → heracles bulk load → Neo4j → model cache → views. The spark_dsg object is NOT kept in memory.
 - **Model signals**: all mutations go through SceneGraphModel, which updates Neo4j + cache and emits Qt signals. Views never talk to Neo4j directly.
+- **Spatial layout**: nodes positioned by actual 3D coordinates (x, -y projection). Not hierarchical bands.
 - **Property panel**: converts between Neo4j's CartesianPoint format and [x,y,z] lists. The "pos" widget key maps to the "center" Neo4j property.
+- **Per-node locking**: each NodeItem has a locked/unlocked state controlling drag. Property panel shows the toggle.
+- **Focus on subtree**: `model.get_descendants()` does BFS on CONTAINS edges; `graph_view.focus_on_node()` hides everything else. Layer toggles respect the focused set.
+- **Security**: `neo4j_crud.py` validates property names against `ALLOWED_PROPERTIES` whitelist before building dynamic Cypher SET clauses.
 
 ## Dependencies (sibling repos under ~/software/mit/sget/)
 - **spark_dsg**: `~/software/mit/sget/Spark-DSG/python/` — scene graph library with Python bindings
@@ -86,4 +97,5 @@ pytest
 - Node IDs use `spark_dsg.NodeSymbol(category_char, index)` — category char varies by DSG creator (e.g., 'O' or 'o' for Objects)
 - Scene graph layers: Objects(2), Places(3), Rooms(4), Buildings(5), MeshPlaces(20)
 - Neo4j edge types: intralayer (`OBJECT_CONNECTED`, `PLACE_CONNECTED`, etc.) and interlayer (`CONTAINS`)
+- Layer hierarchy order is defined by position in `LAYER_STYLES`, NOT by raw layer IDs (MeshPlaces has ID 20 but sits below Rooms ID 4)
 - Add comments explaining design choices, not just what code does

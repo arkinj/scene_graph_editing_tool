@@ -13,6 +13,7 @@ described in the plan (NodeIdAllocator concept) but kept simple — a function
 rather than a separate class, since we only need it here.
 """
 
+from heracles import constants as hc
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -115,9 +116,9 @@ class AddNodeDialog(QDialog):
         self._class_combo.clear()
         layer_label = self._layer_combo.currentData()
 
-        if layer_label == "Room":
+        if layer_label == hc.ROOMS:
             labels = self._model.get_room_labels()
-        elif layer_label in ("Object", "MeshPlace"):
+        elif layer_label in (hc.OBJECTS, hc.MESH_PLACES):
             labels = self._model.get_object_labels()
         else:
             labels = {}
@@ -146,10 +147,10 @@ class AddNodeDialog(QDialog):
         }
 
         # Layer-specific properties.
-        if layer_label in ("Object", "Room", "MeshPlace"):
+        if layer_label in (hc.OBJECTS, hc.ROOMS, hc.MESH_PLACES):
             props["class"] = self._class_combo.currentText() or "unknown"
 
-        if layer_label == "Object":
+        if layer_label == hc.OBJECTS:
             props["name"] = self._name_edit.text()
             # Default bounding box at the node position with unit dimensions.
             props["bbox_x"] = props["pos_x"]

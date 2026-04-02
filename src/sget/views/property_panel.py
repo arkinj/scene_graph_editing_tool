@@ -23,12 +23,13 @@ which behave like sequences [x, y, z].  We read them as such and convert
 back to [x, y, z] lists for ``model.update_node()``.
 """
 
+from heracles import constants as hc
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -49,9 +50,10 @@ _POS_DECIMALS = 4
 class PropertyPanel(QWidget):
     """Dock widget content for viewing and editing node properties."""
 
-    def __init__(self, model: SceneGraphModel, parent: QWidget | None = None):
+    def __init__(self, model: SceneGraphModel, graph_view=None, parent: QWidget | None = None):
         super().__init__(parent)
         self._model = model
+        self._graph_view = graph_view
         self._current_symbol: str | None = None
 
         # Outer layout with scroll area — the form can grow tall for Objects.
@@ -138,10 +140,20 @@ class PropertyPanel(QWidget):
             "Layer:", self._make_readonly(style.display_name if style else layer_label)
         )
 
-        # --- Position (all nodes have this) ---
+        # --- Lock toggle (controls whether the node can be dragged) ---
+        if self._graph_view is not None:
+            locked = self._graph_view.is_node_locked(node_symbol)
+            lock_cb = QCheckBox("Locked")
+            lock_cb.setChecked(locked)
+            lock_cb.toggled.connect(
+                lambda checked, ns=node_symbol: self._graph_view.set_node_locked(ns, checked)
+            )
+            self._form_layout.addRow("Position:", lock_cb)
+
+        # --- Position fields ---
         center = props.get("center", [0, 0, 0])
         pos_widget, pos_spins = self._make_vec3("pos", center)
-        self._form_layout.addRow("Position:", pos_widget)
+        self._form_layout.addRow("", pos_widget)
 
         # --- Name (Objects have this, may be empty string) ---
         if "name" in props:
@@ -155,7 +167,7 @@ class PropertyPanel(QWidget):
             # Populate with known labels from the model's labelspace.
             current_class = str(props["class"])
             labels = self._model.get_object_labels()
-            if layer_label == "Room":
+            if layer_label == hc.ROOMS:
                 labels = self._model.get_room_labels()
 
             class_names = sorted(labels.keys()) if labels else []
@@ -220,7 +232,12 @@ class PropertyPanel(QWidget):
             updates["class"] = self._widgets["class"].currentText()
 
         if updates:
-            self._model.update_node(self._current_symbol, updates)
+            try:
+                self._model.update_node(self._current_symbol, updates)
+            except Exception as e:
+                from PySide6.QtWidgets import QMessageBox
+
+                QMessageBox.critical(self, "Update Error", str(e))
 
     # ------------------------------------------------------------------
     # Widget helpers
@@ -232,10 +249,15 @@ class PropertyPanel(QWidget):
         return label
 
     def _make_vec3(self, key_prefix: str, values) -> tuple[QWidget, list[QDoubleSpinBox]]:
-        """Create a row of 3 spin boxes for a 3D vector."""
+        """Create a vertical stack of 3 spin boxes for a 3D vector.
+
+        Stacked vertically so the property panel can stay narrow and give
+        more room to the central graph view.
+        """
         container = QWidget()
-        layout = QHBoxLayout(container)
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
 
         spins = []
         for i, axis in enumerate(("x", "y", "z")):

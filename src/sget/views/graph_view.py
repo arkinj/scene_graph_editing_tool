@@ -68,8 +68,12 @@ class NodeItem(QGraphicsEllipseItem):
     """Visual representation of a scene graph node.
 
     Each node is a colored circle with a text label.  It is selectable
-    by clicking, and the view translates selection events into model
-    selection updates.
+    by clicking, and optionally draggable when positions are unlocked.
+
+    When dragged, connected edges are updated in real time via the
+    ``ItemSendsGeometryChanges`` flag and ``itemChange`` override.
+    The actual model update (writing to Neo4j) happens on mouse release,
+    handled by the parent GraphView.
     """
 
     def __init__(self, node_symbol: str, layer_label: str, display_text: str, x: float, y: float):
@@ -93,6 +97,11 @@ class NodeItem(QGraphicsEllipseItem):
 
         # Make it selectable (QGraphicsView handles click events).
         self.setFlag(QGraphicsEllipseItem.ItemIsSelectable, True)
+        # Enable geometry change notifications so we can update edges during drag.
+        self.setFlag(QGraphicsEllipseItem.ItemSendsGeometryChanges, True)
+
+        # Per-node lock state — locked by default (not draggable).
+        self._locked = True
 
         # Text label below the circle.
         self._label = QGraphicsSimpleTextItem(display_text, self)
@@ -101,12 +110,32 @@ class NodeItem(QGraphicsEllipseItem):
         font.setPointSize(7)
         self._label.setFont(font)
 
+    @property
+    def locked(self) -> bool:
+        return self._locked
+
+    def set_locked(self, locked: bool):
+        self._locked = locked
+        self.setFlag(QGraphicsEllipseItem.ItemIsMovable, not locked)
+
     def set_highlighted(self, highlighted: bool):
         """Toggle selection highlight."""
         if highlighted:
             self.setPen(QPen(QColor(SELECTION_COLOR), SELECTION_PEN_WIDTH))
         else:
             self.setPen(self._default_pen)
+
+    def itemChange(self, change, value):
+        """Update connected edges in real time while dragging."""
+        if change == QGraphicsEllipseItem.ItemPositionHasChanged:
+            # Find the parent GraphView and ask it to reposition edges.
+            scene = self.scene()
+            if scene:
+                for view in scene.views():
+                    if hasattr(view, "_graph_view"):
+                        view._graph_view._update_edges_for_node(self.node_symbol)
+                        break
+        return super().itemChange(change, value)
 
 
 class EdgeItem(QGraphicsLineItem):
@@ -168,6 +197,9 @@ class GraphView(QWidget):
         # Boundary overlay items for Rooms with polygon data.
         self._boundary_items: dict[str, QGraphicsPolygonItem] = {}
 
+        # Focused subtree state — when set, only these nodes are visible.
+        self._focused_set: set[str] | None = None
+
         # Polygon drawing state.
         self._polygon_mode_active = False
         self._polygon_vertices: list[QPointF] = []
@@ -178,12 +210,17 @@ class GraphView(QWidget):
         self._scene = QGraphicsScene(self)
         self._view = _ZoomableGraphicsView(self._scene, self)
         self._view.setRenderHint(self._view.renderHints())
-        self._view.setDragMode(QGraphicsView.RubberBandDrag)
+        # Default to scroll/pan drag.  Hold Shift for rubber-band selection.
+        # Override the grab cursor that ScrollHandDrag sets — the hand icon
+        # makes node selection feel imprecise.
+        self._view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self._view.viewport().setCursor(Qt.ArrowCursor)
 
         # Search bar for filtering nodes by symbol, class, or name.
         self._search_bar = QLineEdit()
         self._search_bar.setPlaceholderText("Search nodes... (by symbol, class, or name)")
         self._search_bar.setClearButtonEnabled(True)
+        self._search_bar.setFocusPolicy(Qt.ClickFocus)  # Only focus when clicked, not on startup.
         self._search_bar.textChanged.connect(self._on_search_changed)
         self._search_bar.returnPressed.connect(self._on_search_enter)
 
@@ -198,6 +235,7 @@ class GraphView(QWidget):
         self._model.layer_visibility_changed.connect(self._on_layer_visibility_changed)
         self._model.node_added.connect(self._on_node_added)
         self._model.node_removed.connect(self._on_node_removed)
+        self._model.node_updated.connect(self._on_node_updated)
         self._model.edge_added.connect(self._on_edge_added)
         self._model.edge_removed.connect(self._on_edge_removed)
         self._model.interlayer_edges_visibility_changed.connect(
@@ -234,8 +272,8 @@ class GraphView(QWidget):
         self._cleanup_polygon_visuals()
         self._polygon_mode_active = False
         self._polygon_vertices = []
-        self._view.setDragMode(QGraphicsView.RubberBandDrag)
-        self._view.setCursor(Qt.ArrowCursor)
+        self._view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self._view.viewport().setCursor(Qt.ArrowCursor)
 
     def _on_polygon_click(self, scene_pos: QPointF):
         """Handle a left-click in polygon mode — place a vertex."""
@@ -347,6 +385,105 @@ class GraphView(QWidget):
         return captured
 
     # ------------------------------------------------------------------
+    # Focus on subtree
+    # ------------------------------------------------------------------
+
+    def focus_on_node(self, node_symbol: str):
+        """Show only the selected node and its descendants, hiding everything else.
+
+        Traverses CONTAINS edges transitively to find all children,
+        grandchildren, etc.  The focused node itself is also shown.
+        Edges between visible nodes remain; all others are hidden.
+        """
+        descendants = self._model.get_descendants(node_symbol)
+        visible_set = descendants | {node_symbol}
+        self._focused_set = visible_set
+
+        for ns, item in self._node_items.items():
+            item.setVisible(ns in visible_set)
+
+        self._update_edge_visibility()
+
+        # Don't refit — keep the current zoom/pan so the transition
+        # isn't disorienting.  The user can press F to fit if desired.
+
+    def clear_focus(self):
+        """Restore all nodes to visibility (respecting layer toggles).
+
+        Undoes a previous ``focus_on_node`` call.
+        """
+        self._focused_set = None
+
+        # Restore visibility based on layer toggles.
+        for ns, item in self._node_items.items():
+            layer_visible = self._model.is_layer_visible(item.layer_label)
+            item.setVisible(layer_visible)
+
+        # Also restore boundary items.
+        from heracles import constants as hc
+
+        rooms_visible = self._model.is_layer_visible(hc.ROOMS)
+        for boundary_item in self._boundary_items.values():
+            boundary_item.setVisible(rooms_visible)
+
+        self._update_edge_visibility()
+
+    @property
+    def is_focused(self) -> bool:
+        return self._focused_set is not None
+
+    # ------------------------------------------------------------------
+    # Position lock / unlock (drag-to-reposition)
+    # ------------------------------------------------------------------
+
+    def set_node_locked(self, node_symbol: str, locked: bool):
+        """Lock or unlock a specific node's position."""
+        item = self._node_items.get(node_symbol)
+        if item:
+            item.set_locked(locked)
+
+    def is_node_locked(self, node_symbol: str) -> bool:
+        """Check whether a node is position-locked."""
+        item = self._node_items.get(node_symbol)
+        return item.locked if item else True
+
+    def _update_edges_for_node(self, node_symbol: str):
+        """Reposition all edges connected to a node (called during drag)."""
+        for key, edge_item in self._edge_items.items():
+            if node_symbol in key:
+                from_item = self._node_items.get(edge_item.from_symbol)
+                to_item = self._node_items.get(edge_item.to_symbol)
+                if from_item and to_item:
+                    edge_item.setLine(
+                        from_item.pos().x(),
+                        from_item.pos().y(),
+                        to_item.pos().x(),
+                        to_item.pos().y(),
+                    )
+
+    def commit_node_position(self, node_symbol: str):
+        """Write a dragged node's new position to the model (scene → world coords).
+
+        Called on mouse release after a drag. Converts scene coordinates
+        back to world coordinates and updates Neo4j.
+        """
+        item = self._node_items.get(node_symbol)
+        if item is None:
+            return
+
+        # Scene coords → world coords (reverse of layout projection).
+        world_x = item.pos().x() / DEFAULT_SCALE
+        world_y = -item.pos().y() / DEFAULT_SCALE
+
+        # Read current z from the model (we only drag in 2D).
+        props = self._model.get_node(node_symbol)
+        world_z = 0.0
+        if props and "center" in props:
+            world_z = float(props["center"][2])
+
+        self._model.update_node(node_symbol, {"center": [world_x, world_y, world_z]})
+
+    # ------------------------------------------------------------------
     # Full rebuild (on graph_loaded)
     # ------------------------------------------------------------------
 
@@ -382,9 +519,18 @@ class GraphView(QWidget):
         # Draw boundary overlays for Rooms with polygon data.
         self._draw_boundaries()
 
-        # Fit the view to show all items (guard against empty scene).
+        # Set the scene rect much larger than the content so the user can
+        # pan freely even when zoomed out.  Without this, ScrollHandDrag
+        # stops at the edge of the items bounding rect.
         bounds = self._scene.itemsBoundingRect()
         if not bounds.isNull():
+            padded = bounds.adjusted(
+                -bounds.width(),
+                -bounds.height(),
+                bounds.width(),
+                bounds.height(),
+            )
+            self._scene.setSceneRect(padded)
             self._view.fitInView(bounds, Qt.KeepAspectRatio)
 
         # Clear search bar.
@@ -405,6 +551,34 @@ class GraphView(QWidget):
 
         x, y = self._default_position_for_layer(layer_label)
         self._add_node_item(node_symbol, layer_label, props, x, y)
+
+    def _on_node_updated(self, node_symbol: str, layer_label: str):
+        """Update a node's visual position and label after a property edit."""
+        item = self._node_items.get(node_symbol)
+        if item is None:
+            return
+
+        props = self._model.get_node(node_symbol)
+        if props is None:
+            return
+
+        # Update position from the node's center property.
+        center = props.get("center")
+        if center is not None:
+            item.setPos(float(center[0]) * DEFAULT_SCALE, -float(center[1]) * DEFAULT_SCALE)
+
+            # Reposition connected edges to follow the node.
+            for key, edge_item in self._edge_items.items():
+                if node_symbol in key:
+                    from_item = self._node_items.get(edge_item.from_symbol)
+                    to_item = self._node_items.get(edge_item.to_symbol)
+                    if from_item and to_item:
+                        edge_item.setLine(
+                            from_item.pos().x(),
+                            from_item.pos().y(),
+                            to_item.pos().x(),
+                            to_item.pos().y(),
+                        )
 
     def _on_node_removed(self, node_symbol: str, layer_label: str):
         """Remove a single node and its connected edges from the scene."""
@@ -441,6 +615,7 @@ class GraphView(QWidget):
             display = f"{ns}\n{props['class']}"
 
         item = NodeItem(ns, layer_label, display, x, y)
+        # New nodes default to locked (not draggable).
         self._scene.addItem(item)
         self._node_items[ns] = item
 
@@ -523,10 +698,18 @@ class GraphView(QWidget):
     # ------------------------------------------------------------------
 
     def _on_layer_visibility_changed(self, layer_label: str, visible: bool):
-        """Toggle visibility of all nodes, edges, and boundaries in a layer."""
+        """Toggle visibility of all nodes, edges, and boundaries in a layer.
+
+        Respects the focused subtree — if a focus is active, only nodes in
+        the focused set can become visible.
+        """
         for ns, item in self._node_items.items():
             if item.layer_label == layer_label:
-                item.setVisible(visible)
+                if visible and self._focused_set is not None:
+                    # Only show if the node is in the focused subtree.
+                    item.setVisible(ns in self._focused_set)
+                else:
+                    item.setVisible(visible)
 
         # Toggle boundary overlays for Room layer.
         from heracles import constants as hc
@@ -570,7 +753,9 @@ class GraphView(QWidget):
     def _show_context_menu(self, pos):
         """Show a context menu with available actions based on selection.
 
-        Called by the ZoomableGraphicsView on right-click.
+        Called by the ZoomableGraphicsView on right-click.  If both nodes and
+        edges are selected (common with rubber-band), we prioritize nodes so
+        that "Add as children" and other node operations appear cleanly.
         """
         menu = QMenu(self)
 
@@ -581,12 +766,30 @@ class GraphView(QWidget):
             item for item in self._scene.selectedItems() if isinstance(item, EdgeItem)
         ]
 
+        # Prioritize nodes over edges — deselect edges if nodes are present.
+        if selected_nodes and selected_edges:
+            for edge_item in selected_edges:
+                edge_item.setSelected(False)
+            selected_edges = []
+
         if len(selected_nodes) == 2 and selected_nodes[0] != selected_nodes[1]:
             add_edge_action = QAction("Add Edge", self)
             add_edge_action.triggered.connect(
                 lambda: self._model.add_edge(selected_nodes[0], selected_nodes[1])
             )
             menu.addAction(add_edge_action)
+
+        # "Add as children" — if selection has exactly one higher-layer node
+        # and one or more lower-layer nodes, offer to create CONTAINS edges.
+        if len(selected_nodes) >= 2:
+            parent, children = self._detect_parent_children(selected_nodes)
+            if parent and children:
+                label = f"Add {len(children)} node(s) as children of {parent}"
+                add_children_action = QAction(label, self)
+                add_children_action.triggered.connect(
+                    lambda: self._add_children_to_parent(parent, children)
+                )
+                menu.addAction(add_children_action)
 
         if selected_nodes:
             delete_action = QAction(f"Delete {len(selected_nodes)} Node(s)", self)
@@ -619,6 +822,51 @@ class GraphView(QWidget):
             self._delete_selected_nodes()
         elif selected_edges:
             self._delete_selected_edges(selected_edges)
+
+    def _detect_parent_children(self, selected_nodes: list[str]) -> tuple[str | None, list[str]]:
+        """Check if the selection contains one parent and multiple children.
+
+        Returns (parent_symbol, [child_symbols]) if exactly one node is from
+        a higher layer than the rest, or (None, []) if the selection doesn't
+        match this pattern.
+
+        Uses position in LAYER_STYLES (not raw layer IDs) to determine
+        hierarchy.  LAYER_STYLES is ordered from most abstract (Buildings,
+        index 0) to most concrete (Objects, index 4).  Lower index = parent.
+        This is necessary because MeshPlaces has layer_id=20 but sits below
+        Rooms (layer_id=4) in the hierarchy.
+        """
+        from sget.utils.colors import LAYER_STYLES
+
+        # Hierarchy rank: lower index in LAYER_STYLES = more abstract = parent.
+        rank_by_label = {s.layer_label: i for i, s in enumerate(LAYER_STYLES)}
+
+        node_ranks = {}
+        for ns in selected_nodes:
+            layer_label = self._model.get_node_layer(ns)
+            if layer_label in rank_by_label:
+                node_ranks[ns] = rank_by_label[layer_label]
+
+        if len(set(node_ranks.values())) != 2:
+            return None, []
+
+        # Lower rank = more abstract = parent.
+        min_rank = min(node_ranks.values())
+        parents = [ns for ns, rank in node_ranks.items() if rank == min_rank]
+        children = [ns for ns, rank in node_ranks.items() if rank != min_rank]
+
+        if len(parents) != 1:
+            return None, []
+
+        return parents[0], children
+
+    def _add_children_to_parent(self, parent_symbol: str, child_symbols: list[str]):
+        """Create CONTAINS edges from the parent to each child."""
+        for child_ns in child_symbols:
+            try:
+                self._model.add_edge(parent_symbol, child_ns)
+            except Exception:
+                pass  # Edge may already exist or be invalid.
 
     def _delete_selected_nodes(self):
         """Delete all selected nodes via the model, with confirmation."""
@@ -782,6 +1030,20 @@ class _ZoomableGraphicsView(QGraphicsView):
             self._graph_view._on_polygon_click(scene_pos)
             return
         super().mousePressEvent(event)
+        # ScrollHandDrag sets a ClosedHandCursor on press — override it.
+        if not self._graph_view.polygon_mode_active:
+            self.viewport().setCursor(Qt.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        # Commit positions for any unlocked nodes that were dragged.
+        for item in self.scene().selectedItems():
+            if isinstance(item, NodeItem) and not item.locked:
+                self._graph_view.commit_node_position(item.node_symbol)
+
+        super().mouseReleaseEvent(event)
+        # ScrollHandDrag may reset the cursor on release — override again.
+        if not self._graph_view.polygon_mode_active:
+            self.viewport().setCursor(Qt.ArrowCursor)
 
     def mouseDoubleClickEvent(self, event):
         if self._graph_view.polygon_mode_active and event.button() == Qt.LeftButton:
@@ -807,4 +1069,14 @@ class _ZoomableGraphicsView(QGraphicsView):
             if not bounds.isNull():
                 self.fitInView(bounds, Qt.KeepAspectRatio)
             return
+        # Hold Shift to switch to rubber-band selection mode.
+        if event.key() == Qt.Key_Shift and not self._graph_view.polygon_mode_active:
+            self.setDragMode(QGraphicsView.RubberBandDrag)
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        # Release Shift to return to scroll/pan mode.
+        if event.key() == Qt.Key_Shift and not self._graph_view.polygon_mode_active:
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.viewport().setCursor(Qt.ArrowCursor)
+        super().keyReleaseEvent(event)

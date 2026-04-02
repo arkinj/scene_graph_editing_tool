@@ -281,6 +281,30 @@ class SceneGraphModel(QObject):
             props for ns, props in self._nodes.items() if self._node_layers.get(ns) == layer_label
         ]
 
+    def get_descendants(self, node_symbol: str) -> set[str]:
+        """Find all transitive descendants of a node via CONTAINS edges.
+
+        Walks the cached edge list following CONTAINS edges from parent to
+        child, collecting all reachable descendants.  Used by the Focus on
+        Subtree feature to show only a node's subtree.
+        """
+        # Build a children lookup from CONTAINS edges.
+        children_of: dict[str, list[str]] = {}
+        for e in self._edges:
+            if e["edge_type"] == "CONTAINS":
+                children_of.setdefault(e["from_symbol"], []).append(e["to_symbol"])
+
+        # BFS from the root node.
+        descendants = set()
+        queue = list(children_of.get(node_symbol, []))
+        while queue:
+            child = queue.pop()
+            if child not in descendants:
+                descendants.add(child)
+                queue.extend(children_of.get(child, []))
+
+        return descendants
+
     def get_all_nodes(self) -> dict[str, dict]:
         """Get the full node cache.  Returns {node_symbol: props_dict}."""
         return self._nodes

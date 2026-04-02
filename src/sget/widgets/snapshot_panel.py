@@ -82,11 +82,18 @@ class SnapshotPanel(QWidget):
         """Set the snapshot directory based on the loaded file's location.
 
         Called by MainWindow after loading a file.  Creates the directory
-        if it doesn't exist.
+        if it doesn't exist.  Auto-saves an "initial" snapshot so the user
+        can always revert to the original state.
         """
         parent_dir = Path(loaded_file_path).parent
         self._snapshot_dir = parent_dir / _SNAPSHOT_DIR_NAME
         self._snapshot_dir.mkdir(exist_ok=True)
+
+        # Auto-save the initial state if no snapshots exist yet.
+        existing = list(self._snapshot_dir.glob("*.json"))
+        if not existing:
+            self._save_snapshot("initial_load")
+
         self._refresh_list()
 
     # ------------------------------------------------------------------
@@ -104,9 +111,11 @@ class SnapshotPanel(QWidget):
             return
 
         name = name.strip().replace(" ", "_")
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._save_snapshot(name)
 
-        # Include node/edge counts in the filename for display without parsing.
+    def _save_snapshot(self, name: str):
+        """Save the current state as a named snapshot."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         n_nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
         n_edges = len(self._model.get_edges())
         filename = f"{name}__{timestamp}__{n_nodes}n_{n_edges}e.json"
