@@ -50,8 +50,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, layer_dock)
 
         # --- Right dock: property panel ---
-        self._property_panel = PropertyPanel(model, self)
-        self._property_panel._graph_view = self._graph_view
+        self._property_panel = PropertyPanel(model, graph_view=self._graph_view, parent=self)
         property_dock = QDockWidget("Properties", self)
         property_dock.setWidget(self._property_panel)
         property_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)

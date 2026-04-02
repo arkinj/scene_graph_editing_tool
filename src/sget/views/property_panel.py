@@ -23,6 +23,7 @@ which behave like sequences [x, y, z].  We read them as such and convert
 back to [x, y, z] lists for ``model.update_node()``.
 """
 
+from heracles import constants as hc
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -49,10 +50,10 @@ _POS_DECIMALS = 4
 class PropertyPanel(QWidget):
     """Dock widget content for viewing and editing node properties."""
 
-    def __init__(self, model: SceneGraphModel, parent: QWidget | None = None):
+    def __init__(self, model: SceneGraphModel, graph_view=None, parent: QWidget | None = None):
         super().__init__(parent)
         self._model = model
-        self._graph_view = None  # Set by MainWindow after construction.
+        self._graph_view = graph_view
         self._current_symbol: str | None = None
 
         # Outer layout with scroll area — the form can grow tall for Objects.
@@ -166,7 +167,7 @@ class PropertyPanel(QWidget):
             # Populate with known labels from the model's labelspace.
             current_class = str(props["class"])
             labels = self._model.get_object_labels()
-            if layer_label == "Room":
+            if layer_label == hc.ROOMS:
                 labels = self._model.get_room_labels()
 
             class_names = sorted(labels.keys()) if labels else []

@@ -32,6 +32,7 @@ down to just Places, just MeshPlaces, or keep all.  Default is
 """
 
 import numpy as np
+from heracles import constants as hc
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -48,10 +49,10 @@ from sget.widgets.add_node_dialog import _next_node_symbol
 
 # Valid parent layers for each child layer, matching heracles' hierarchy.
 _PARENT_LAYERS = {
-    "Object": ["Place", "MeshPlace"],
-    "Place": ["Room"],
-    "MeshPlace": ["Room"],
-    "Room": ["Building"],
+    hc.OBJECTS: [hc.PLACES, hc.MESH_PLACES],
+    hc.PLACES: [hc.ROOMS],
+    hc.MESH_PLACES: [hc.ROOMS],
+    hc.ROOMS: [hc.BUILDINGS],
 }
 
 
@@ -98,8 +99,9 @@ class GroupDialog(QDialog):
             display = style.display_name if style else layer
             self._child_filter_combo.addItem(f"{display} only", layer)
         # If Places+MeshPlaces are both present, add a combined option.
-        if "Place" in available_layers and "MeshPlace" in available_layers:
-            self._child_filter_combo.insertItem(1, "Places + MeshPlaces", "Place+MeshPlace")
+        if hc.PLACES in available_layers and hc.MESH_PLACES in available_layers:
+            combined_key = f"{hc.PLACES}+{hc.MESH_PLACES}"
+            self._child_filter_combo.insertItem(1, "Places + MeshPlaces", combined_key)
             self._child_filter_combo.setCurrentIndex(1)
         self._child_filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         form.addRow("Include:", self._child_filter_combo)
@@ -140,9 +142,11 @@ class GroupDialog(QDialog):
         filter_value = self._child_filter_combo.currentData()
         if filter_value == "all":
             return list(self._all_selected)
-        elif filter_value == "Place+MeshPlace":
+        elif filter_value == f"{hc.PLACES}+{hc.MESH_PLACES}":
             return [
-                ns for ns, layer in self._node_layer_map.items() if layer in ("Place", "MeshPlace")
+                ns
+                for ns, layer in self._node_layer_map.items()
+                if layer in (hc.PLACES, hc.MESH_PLACES)
             ]
         else:
             return [ns for ns, layer in self._node_layer_map.items() if layer == filter_value]
@@ -173,9 +177,9 @@ class GroupDialog(QDialog):
         """Update class dropdown when parent layer changes."""
         self._class_combo.clear()
         label = self._parent_combo.currentData()
-        if label == "Room":
+        if label == hc.ROOMS:
             labels = self._model.get_room_labels()
-        elif label in ("Object", "MeshPlace"):
+        elif label in (hc.OBJECTS, hc.MESH_PLACES):
             labels = self._model.get_object_labels()
         else:
             labels = {}
@@ -225,10 +229,10 @@ class GroupDialog(QDialog):
             "pos_z": centroid[2],
         }
 
-        if parent_label in ("Room", "MeshPlace"):
+        if parent_label in (hc.ROOMS, hc.MESH_PLACES):
             parent_props["class"] = self._class_combo.currentText() or "unknown"
 
-        if parent_label == "Object":
+        if parent_label == hc.OBJECTS:
             parent_props["class"] = self._class_combo.currentText() or "unknown"
             parent_props["name"] = self._name_edit.text()
             parent_props["bbox_x"] = centroid[0]
@@ -239,7 +243,7 @@ class GroupDialog(QDialog):
             parent_props["bbox_h"] = 1.0
 
         # Store boundary from polygon tool (if provided).
-        if self._boundary and parent_label == "Room":
+        if self._boundary and parent_label == hc.ROOMS:
             parent_props["boundary_x"] = [pt[0] for pt in self._boundary]
             parent_props["boundary_y"] = [pt[1] for pt in self._boundary]
 
