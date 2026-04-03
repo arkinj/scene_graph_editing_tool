@@ -88,6 +88,8 @@ ALLOWED_PROPERTIES = {
     "name",
     "boundary_x",
     "boundary_y",
+    "min_radius",
+    "max_radius",
 }
 
 
@@ -145,20 +147,43 @@ def create_place(db: Neo4jWrapper, node_symbol: str, props: dict):
 
 
 def create_mesh_place(db: Neo4jWrapper, node_symbol: str, props: dict):
-    """Create a single MeshPlace node.  Required keys: pos_x/y/z, class."""
+    """Create a single MeshPlace node.
+
+    Required keys: pos_x/y/z.
+    Optional keys: class, min_radius, max_radius (newer DSGs use
+    TravNodeAttributes which have radii instead of semantic labels).
+    """
+    params = {
+        "ns": node_symbol,
+        "pos_x": props["pos_x"],
+        "pos_y": props["pos_y"],
+        "pos_z": props["pos_z"],
+    }
+
+    # Build optional property clauses for fields that may or may not be present.
+    # Older DSGs have "class" (from semantic_label); newer ones have radii.
+    optional_parts = []
+    if "class" in props:
+        optional_parts.append("class: $cls")
+        params["cls"] = props["class"]
+    if "min_radius" in props:
+        optional_parts.append("min_radius: $min_radius")
+        params["min_radius"] = props["min_radius"]
+    if "max_radius" in props:
+        optional_parts.append("max_radius: $max_radius")
+        params["max_radius"] = props["max_radius"]
+
+    opt_str = ", " + ", ".join(optional_parts) if optional_parts else ""
+
     db.execute(
         f"""
         CREATE (:{constants.MESH_PLACES} {{
             nodeSymbol: $ns,
-            center: point({{x: $pos_x, y: $pos_y, z: $pos_z}}),
-            class: $cls
+            center: point({{x: $pos_x, y: $pos_y, z: $pos_z}})
+            {opt_str}
         }})
         """,
-        ns=node_symbol,
-        pos_x=props["pos_x"],
-        pos_y=props["pos_y"],
-        pos_z=props["pos_z"],
-        cls=props["class"],
+        **params,
     )
 
 

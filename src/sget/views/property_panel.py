@@ -181,6 +181,23 @@ class PropertyPanel(QWidget):
             self._widgets["class"] = class_combo
             self._form_layout.addRow("Class:", class_combo)
 
+        # --- Radii (MeshPlaces with TravNodeAttributes) ---
+        if "min_radius" in props:
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 10000.0)
+            spin.setDecimals(4)
+            spin.setValue(float(props["min_radius"]))
+            self._widgets["min_radius"] = spin
+            self._form_layout.addRow("Min Radius:", spin)
+
+        if "max_radius" in props:
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 10000.0)
+            spin.setDecimals(4)
+            spin.setValue(float(props["max_radius"]))
+            self._widgets["max_radius"] = spin
+            self._form_layout.addRow("Max Radius:", spin)
+
         # --- Bounding box (Objects only) ---
         if "bbox_center" in props:
             bc = props["bbox_center"]
@@ -230,6 +247,10 @@ class PropertyPanel(QWidget):
 
         if "class" in self._widgets:
             updates["class"] = self._widgets["class"].currentText()
+
+        for radius_key in ("min_radius", "max_radius"):
+            if radius_key in self._widgets:
+                updates[radius_key] = self._widgets[radius_key].value()
 
         if updates:
             try:

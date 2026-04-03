@@ -35,7 +35,7 @@ LAYER_STYLES = [
     LayerStyle(constants.BUILDINGS, 5, "Buildings", "#636EFA", "B"),
     LayerStyle(constants.ROOMS, 4, "Rooms", "#EF553B", "R"),
     LayerStyle(constants.PLACES, 3, "Places", "#AB63FA", "p"),
-    LayerStyle(constants.MESH_PLACES, 20, "MeshPlaces", "#FFA15A", "P"),
+    LayerStyle(constants.MESH_PLACES, 20, "MeshPlaces", "#FFA15A", "t"),
     LayerStyle(constants.OBJECTS, 2, "Objects", "#00CC96", "O"),
 ]
 
