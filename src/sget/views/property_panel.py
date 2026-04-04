@@ -211,10 +211,36 @@ class PropertyPanel(QWidget):
             bd_widget, _ = self._make_vec3("bbox_dim", bd)
             self._form_layout.addRow("BBox Size:", bd_widget)
 
-        # --- Boundary (Rooms with polygon data) ---
+        # --- Boundary (Rooms with polygon data, or Place2d Point3D list) ---
         if "boundary_x" in props and "boundary_y" in props:
             n_verts = len(props["boundary_x"])
             self._form_layout.addRow("Boundary:", self._make_readonly(f"{n_verts} vertices"))
+        elif "boundary" in props and isinstance(props["boundary"], list):
+            self._form_layout.addRow(
+                "Boundary:", self._make_readonly(f"{len(props['boundary'])} points")
+            )
+
+        # --- Read-only info fields ---
+        if "color_r" in props:
+            rgb = f"({props['color_r']}, {props['color_g']}, {props['color_b']})"
+            self._form_layout.addRow("Color:", self._make_readonly(rgb))
+
+        if "registered" in props:
+            self._form_layout.addRow("Registered:", self._make_readonly(str(props["registered"])))
+
+        if "distance" in props:
+            self._form_layout.addRow("Distance:", self._make_readonly(f"{props['distance']:.4f}"))
+
+        if "is_active" in props:
+            self._form_layout.addRow("Active:", self._make_readonly(str(props["is_active"])))
+
+        if "first_observed_ns" in props:
+            val = props["first_observed_ns"]
+            display = str(val) if not isinstance(val, list) else f"[{len(val)} timestamps]"
+            self._form_layout.addRow("First Observed:", self._make_readonly(display))
+
+        if "radii" in props:
+            self._form_layout.addRow("Radii:", self._make_readonly(f"{len(props['radii'])} rays"))
 
         # --- Apply button ---
         self._apply_btn = QPushButton("Apply")

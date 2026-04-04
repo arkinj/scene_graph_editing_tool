@@ -52,6 +52,17 @@ Small overview widget (corner of the graph view or separate dock) showing the fu
 ### Auto-Refresh from DB
 Detect when the chat agent modifies Neo4j and refresh automatically. Previous implementation (window focus refresh) was removed because it caused the graph to disappear. Could revisit with a smarter approach (compare node counts before refreshing, or only refresh if the DB was actually modified). Manual Ctrl+Shift+R works for now.
 
+### Labelspace Management Overhaul
+Currently labelspaces are loaded from separate YAML files (via CLI args or heracles defaults) and injected into the DSG metadata before bulk load. This is fragile — the user must know which labelspace file matches their DSG, and if no labelspace is provided, semantic labels aren't mapped to class names.
+
+spark_dsg supports storing labelspaces in the graph metadata (via `G.set_labelspace()` / `G.get_labelspace()`), and some DSGs already embed labelspace info in their metadata (e.g., the `"labelspaces"` key with `_l2p0` nested lists). Investigation needed:
+- What formats does spark_dsg use for embedded labelspaces?
+- Can heracles auto-detect and use embedded labelspaces instead of requiring YAML files?
+- Can we store the labelspace in Neo4j alongside the graph (as a metadata node)?
+- Can SGET's UI show/edit the labelspace (e.g., rename classes)?
+
+Goal: eliminate the need for `--object-labelspace` and `--room-labelspace` CLI args — just load the DSG and everything works.
+
 ## Known Bugs
 
 ### Neo4j Database Clears Unexpectedly
