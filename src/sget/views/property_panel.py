@@ -139,6 +139,8 @@ class PropertyPanel(QWidget):
         self._form_layout.addRow(
             "Layer:", self._make_readonly(style.display_name if style else layer_label)
         )
+        if "attr_type" in props:
+            self._form_layout.addRow("Type:", self._make_readonly(props["attr_type"]))
 
         # --- Lock toggle (controls whether the node can be dragged) ---
         if self._graph_view is not None:

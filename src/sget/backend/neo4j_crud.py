@@ -81,6 +81,7 @@ POINT3D_PROPERTIES = {"center", "bbox_center", "bbox_dim"}
 # via user-supplied keys (e.g., from the property panel).
 ALLOWED_PROPERTIES = {
     "nodeSymbol",
+    "attr_type",
     "center",
     "bbox_center",
     "bbox_dim",

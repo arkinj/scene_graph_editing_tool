@@ -60,6 +60,7 @@ scripts/
 - **heracles**: `~/software/mit/sget/heracles/heracles/` — bridges spark_dsg ↔ Neo4j
 
 Do NOT reference copies of these repos from other locations.
+Do NOT commit to heracles or spark_dsg repos — the user manages commits to those repos directly.
 
 ## Virtual Environment
 ```bash
