@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsLineItem,
     QGraphicsPolygonItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
@@ -419,12 +420,10 @@ class GraphView(QWidget):
             layer_visible = self._model.is_layer_visible(item.layer_label)
             item.setVisible(layer_visible)
 
-        # Also restore boundary items.
-        from heracles import constants as hc
-
-        rooms_visible = self._model.is_layer_visible(hc.ROOMS)
-        for boundary_item in self._boundary_items.values():
-            boundary_item.setVisible(rooms_visible)
+        # Also restore boundary items per-layer visibility.
+        for ns, boundary_item in self._boundary_items.items():
+            bl = self._model.get_node_layer(ns)
+            boundary_item.setVisible(self._model.is_layer_visible(bl) if bl else True)
 
         self._update_edge_visibility()
 
@@ -711,11 +710,9 @@ class GraphView(QWidget):
                 else:
                     item.setVisible(visible)
 
-        # Toggle boundary overlays for Room layer.
-        from heracles import constants as hc
-
-        if layer_label == hc.ROOMS:
-            for boundary_item in self._boundary_items.values():
+        # Toggle boundary overlays for nodes in this layer.
+        for ns, boundary_item in self._boundary_items.items():
+            if self._model.get_node_layer(ns) == layer_label:
                 boundary_item.setVisible(visible)
 
         self._update_edge_visibility()
@@ -944,40 +941,124 @@ class GraphView(QWidget):
     # Boundary visualization
     # ------------------------------------------------------------------
 
+    # Set to True to use polar polygon for TravNode boundaries,
+    # False to use a simple rectangle from max_radius.
+    # Toggle this to compare the two representations visually.
+    USE_POLAR_BOUNDARY = True
+
     def _draw_boundaries(self):
-        """Draw polygon boundary overlays for Room nodes that have boundary data."""
+        """Draw boundary overlays for all node types that have boundary data.
+
+        Supports:
+        - Room: polygon (from Draw Region) or bounding box rectangle
+        - TravNode (MeshPlace): polar polygon from radii, or rectangle from max_radius
+        - Place2d: polygon from Point3D boundary list
+        - Object: bounding box rectangle
+        """
         from heracles import constants as hc
 
-        room_style = STYLE_BY_LABEL.get(hc.ROOMS)
-        room_color = QColor(room_style.color) if room_style else QColor("#EF553B")
+        S = DEFAULT_SCALE
 
         for ns, props in self._model.get_all_nodes().items():
-            if self._model.get_node_layer(ns) != hc.ROOMS:
+            layer_label = self._model.get_node_layer(ns)
+            style = STYLE_BY_LABEL.get(layer_label)
+            if not style:
                 continue
-            if "boundary_x" not in props or "boundary_y" not in props:
-                continue
+            color = QColor(style.color)
 
-            bx = props["boundary_x"]
-            by = props["boundary_y"]
-            if len(bx) < 3:
-                continue
+            item = None
 
-            # Convert world coords → scene coords.
-            points = [QPointF(x * DEFAULT_SCALE, -y * DEFAULT_SCALE) for x, y in zip(bx, by)]
-            polygon = QPolygonF(points)
+            # Room: polygon from Draw Region, or bounding box
+            if layer_label == hc.ROOMS:
+                if "boundary_x" in props and "boundary_y" in props:
+                    bx, by = props["boundary_x"], props["boundary_y"]
+                    if len(bx) >= 3:
+                        item = self._make_polygon_overlay(bx, by, color, S)
+                elif "bbox_l" in props:
+                    item = self._make_bbox_overlay(props, color, S)
 
-            item = QGraphicsPolygonItem(polygon)
-            fill = QColor(room_color)
-            fill.setAlpha(30)
-            item.setBrush(QBrush(fill))
-            item.setPen(QPen(room_color, 1.5, Qt.DashLine))
-            item.setZValue(-2)  # Behind edges and nodes
-            self._scene.addItem(item)
-            self._boundary_items[ns] = item
+            # TravNode: polar polygon from radii, or rectangle
+            elif "radii" in props and props["radii"]:
+                if self.USE_POLAR_BOUNDARY:
+                    item = self._make_radii_polygon_overlay(props, color, S)
+                else:
+                    item = self._make_radii_rect_overlay(props, color, S)
 
-            # Respect current Room layer visibility.
-            if not self._model.is_layer_visible(hc.ROOMS):
-                item.setVisible(False)
+            # Place2d: polygon from Point3D list
+            elif (
+                "boundary" in props
+                and isinstance(props["boundary"], list)
+                and len(props["boundary"]) >= 3
+            ):
+                item = self._make_point3d_polygon_overlay(props["boundary"], color, S)
+
+            # Object: bounding box rectangle
+            elif layer_label == hc.OBJECTS and "bbox_l" in props:
+                item = self._make_bbox_overlay(props, color, S)
+
+            if item:
+                item.setZValue(-2)
+                self._scene.addItem(item)
+                self._boundary_items[ns] = item
+                if not self._model.is_layer_visible(layer_label):
+                    item.setVisible(False)
+
+    def _style_overlay(self, item, color):
+        """Apply consistent semi-transparent styling to a boundary overlay."""
+        fill = QColor(color)
+        fill.setAlpha(30)
+        item.setBrush(QBrush(fill))
+        item.setPen(QPen(color, 1.5, Qt.DashLine))
+        return item
+
+    def _make_polygon_overlay(self, bx, by, color, scale):
+        """Polygon from flat x/y lists (Room Draw Region)."""
+        points = [QPointF(x * scale, -y * scale) for x, y in zip(bx, by)]
+        item = QGraphicsPolygonItem(QPolygonF(points))
+        return self._style_overlay(item, color)
+
+    def _make_bbox_overlay(self, props, color, scale):
+        """Rectangle from bbox center + dimensions."""
+        cx = float(props["bbox_x"]) * scale
+        cy = -float(props["bbox_y"]) * scale
+        w = float(props["bbox_l"]) * scale
+        h = float(props["bbox_w"]) * scale
+        item = QGraphicsRectItem(cx - w / 2, cy - h / 2, w, h)
+        return self._style_overlay(item, color)
+
+    def _make_radii_polygon_overlay(self, props, color, scale):
+        """Polar polygon from TravNode radii (N rays at equal angles)."""
+        import math
+
+        cx = float(props["center"][0]) * scale
+        cy = -float(props["center"][1]) * scale
+        radii = props["radii"]
+        n = len(radii)
+        points = []
+        for i, r in enumerate(radii):
+            angle = 2 * math.pi * i / n
+            points.append(
+                QPointF(
+                    cx + r * scale * math.cos(angle),
+                    cy - r * scale * math.sin(angle),
+                )
+            )
+        item = QGraphicsPolygonItem(QPolygonF(points))
+        return self._style_overlay(item, color)
+
+    def _make_radii_rect_overlay(self, props, color, scale):
+        """Rectangle from TravNode max_radius."""
+        cx = float(props["center"][0]) * scale
+        cy = -float(props["center"][1]) * scale
+        r = float(props.get("max_radius", 1.0)) * scale
+        item = QGraphicsRectItem(cx - r, cy - r, 2 * r, 2 * r)
+        return self._style_overlay(item, color)
+
+    def _make_point3d_polygon_overlay(self, boundary_points, color, scale):
+        """Polygon from Neo4j Point3D list (Place2d boundary)."""
+        points = [QPointF(float(pt[0]) * scale, -float(pt[1]) * scale) for pt in boundary_points]
+        item = QGraphicsPolygonItem(QPolygonF(points))
+        return self._style_overlay(item, color)
 
     # ------------------------------------------------------------------
     # Export to image
