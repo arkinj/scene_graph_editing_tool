@@ -60,6 +60,14 @@ class SnapshotPanel(QWidget):
         self._save_btn.clicked.connect(self._on_save)
         outer.addWidget(self._save_btn)
 
+        # Include mesh checkbox — when checked, snapshots copy the mesh
+        # from the source file, making them self-contained but larger.
+        from PySide6.QtWidgets import QCheckBox
+
+        self._mesh_cb = QCheckBox("Include mesh data")
+        self._mesh_cb.setToolTip("Copy mesh from source file into snapshot (larger file size)")
+        outer.addWidget(self._mesh_cb)
+
         # Scrollable list of snapshots.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -119,10 +127,11 @@ class SnapshotPanel(QWidget):
         n_nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)
         n_edges = len(self._model.get_edges())
         filename = f"{name}__{timestamp}__{n_nodes}n_{n_edges}e.json"
+        include_mesh = self._mesh_cb.isChecked()
 
         path = self._snapshot_dir / filename
         try:
-            self._model.save_to_json(str(path))
+            self._model.save_to_json(str(path), include_mesh=include_mesh)
             self._refresh_list()
         except Exception as e:
             QMessageBox.critical(self, "Snapshot Error", str(e))

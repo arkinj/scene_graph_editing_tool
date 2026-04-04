@@ -98,6 +98,8 @@ def main():
     # Load a file if specified on the command line.
     if args.file:
         try:
+            window.statusBar().showMessage(f"Loading {args.file}...")
+            app.processEvents()  # Paint before blocking load.
             model.load_from_json(args.file)
             window.set_snapshot_dir(args.file)
         except Exception as e:

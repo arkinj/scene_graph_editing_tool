@@ -12,6 +12,7 @@ from collections import Counter
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QDockWidget,
     QFileDialog,
     QMainWindow,
@@ -129,6 +130,8 @@ class MainWindow(QMainWindow):
 
         try:
             self.statusBar().showMessage(f"Loading {path}...")
+            # Force the status bar to repaint before the blocking load.
+            QApplication.processEvents()
             self._model.load_from_json(path)
             self._current_file = path
             self._snapshot_panel.set_snapshot_dir(path)

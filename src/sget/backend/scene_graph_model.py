@@ -202,33 +202,45 @@ class SceneGraphModel(QObject):
 
         # Push to Neo4j (clears existing data first).
         initialize_db(self._db)
-        spark_dsg_to_db(dsg, self._db)
+        spark_dsg_to_db(dsg, self._db, source_file_path=path)
 
         # Populate cache from what's now in Neo4j.
         self._refresh_cache()
         self._selected = []
         self.graph_loaded.emit()
 
-    def save_to_json(self, path: str):
+    def save_to_json(self, path: str, include_mesh: bool = False):
         """Export the current Neo4j state to a JSON file via spark_dsg.
 
         Flow: heracles.db_to_spark_dsg() → DynamicSceneGraph.save().
         This reconstructs the DSG from Neo4j, which ensures the saved file
         reflects exactly what's in the database.
+
+        If ``include_mesh`` is True, the mesh is copied from the original
+        source file (whose path is stored as _GraphMetadata in Neo4j) into
+        the saved file.  This makes the output self-contained but larger.
         """
         if self._db is None:
             raise RuntimeError("Not connected to Neo4j")
 
         # Build the mapping dicts that db_to_spark_dsg requires.
-        # These are the same dicts heracles uses internally.
         spark_layer_id_to_name = {layer_id: label for label, layer_id in LAYER_ORDER}
-
-        # Invert our label->id maps for heracles' expected format.
         label_to_sid = {name: sid for name, sid in self._label_to_semantic_id.items()}
         room_label_to_sid = {name: sid for name, sid in self._room_label_to_semantic_id.items()}
 
         dsg = db_to_spark_dsg(self._db, spark_layer_id_to_name, label_to_sid, room_label_to_sid)
-        dsg.save(path)
+
+        if include_mesh:
+            source_path = self.get_source_file_path()
+            if source_path:
+                import os
+
+                if os.path.exists(source_path):
+                    source_dsg = spark_dsg.DynamicSceneGraph.load(source_path)
+                    if source_dsg.has_mesh():
+                        dsg.mesh = source_dsg.mesh
+
+        dsg.save(path, include_mesh=include_mesh)
 
     def _refresh_cache(self):
         """Rebuild the in-memory cache from Neo4j.
@@ -535,6 +547,28 @@ class SceneGraphModel(QObject):
         if self._show_interlayer_edges != visible:
             self._show_interlayer_edges = visible
             self.interlayer_edges_visibility_changed.emit(visible)
+
+    # ------------------------------------------------------------------
+    # Graph metadata (source file path, mesh location)
+    # ------------------------------------------------------------------
+
+    def get_source_file_path(self) -> str | None:
+        """Get the original DSG file path from Neo4j metadata.
+
+        Returns None if no source path is stored (e.g., old data or
+        graph created from scratch).
+        """
+        if self._db is None:
+            return None
+        try:
+            records, _, _ = self._db.execute(
+                "MATCH (m:_GraphMetadata {key: 'source'}) RETURN m.file_path AS path"
+            )
+            if records:
+                return records[0]["path"]
+        except Exception:
+            pass
+        return None
 
     # ------------------------------------------------------------------
     # Labelspace access (for property panel dropdowns)
