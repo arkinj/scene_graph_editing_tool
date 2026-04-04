@@ -54,6 +54,9 @@ scripts/
 - **Per-node locking**: each NodeItem has a locked/unlocked state controlling drag. Property panel shows the toggle.
 - **Focus on subtree**: `model.get_descendants()` does BFS on CONTAINS edges; `graph_view.focus_on_node()` hides everything else. Layer toggles respect the focused set.
 - **Security**: `neo4j_crud.py` validates property names against `ALLOWED_PROPERTIES` whitelist before building dynamic Cypher SET clauses.
+- **Generic node handling**: heracles uses property-presence (not type-hardcoded) for node conversion. `attr_type` stored on every Neo4j node for reconstruction dispatch. Supports ObjectNodeAttributes, KhronosObjectAttributes, Place2dNodeAttributes, TravNodeAttributes, etc.
+- **Mesh file pointer**: source DSG file path stored as `_GraphMetadata` node in Neo4j. Snapshots can include mesh via `save_to_json(include_mesh=True)`.
+- **Multi-char categories**: `LAYER_STYLES.category_chars` is a tuple — MeshPlaces supports both 'P' and 't', Objects supports 'O' and 'o'.
 
 ## Dependencies (sibling repos under ~/software/mit/sget/)
 - **spark_dsg**: `~/software/mit/sget/Spark-DSG/python/` — scene graph library with Python bindings
