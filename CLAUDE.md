@@ -25,6 +25,7 @@ src/sget/
 │   └── scene_graph_model.py # Central model: cache, Qt signals, selection
 ├── views/
 │   ├── graph_view.py       # QGraphicsView 2D spatial graph, polygon tool, focus, search
+│   ├── graph_items.py      # NodeItem and EdgeItem QGraphicsItem subclasses
 │   └── property_panel.py   # Node property editor with Apply button + lock toggle
 ├── widgets/
 │   ├── layer_panel.py      # Layer visibility toggles, node counts, Add/Delete buttons
@@ -34,7 +35,8 @@ src/sget/
 │   └── snapshot_panel.py   # Save/restore named scene graph snapshots
 └── utils/
     ├── colors.py           # Per-layer colors, styling — single source of truth for layer order
-    └── layout.py           # Spatial layout: x,-y projection from 3D node positions
+    ├── layout.py           # Spatial layout: x,-y projection from 3D node positions
+    └── boundary.py         # Boundary overlay rendering helpers (polygon, bbox, radii)
 tests/
 ├── test_neo4j_crud.py       # CRUD tests against live Neo4j (23 tests)
 ├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility (24 tests)
