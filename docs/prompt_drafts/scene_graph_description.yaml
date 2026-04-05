@@ -1,0 +1,33 @@
+scene_graph_description: |
+  <Scene Graph Description>
+  A 3D scene graph is a hierarchical graph consisting of layers that each contain nodes. Not every graph has every layer — the layers present depend on how the graph was generated.
+
+  Possible Layers:
+  - Objects Layer (OBJECTS): Contains objects that exist in the world (chairs, trees, boxes, etc.). Each Object has a unique ID. The ID prefix varies by graph creator (e.g., "O0" or "o0"). Objects may have different attribute types:
+    - ObjectNodeAttributes: standard objects with semantic class, bounding box, and name
+    - KhronosObjectAttributes: objects with additional temporal data (first/last observed timestamps, trajectory)
+
+  - 3D Places Layer (PLACES): Contains reachable locations in 3D space. Each Place node has a unique ID with a lowercase 'p' prefix (e.g., "p0"). The term for a node in this layer is a 'Place' node, NOT a 'Mesh Place' node.
+
+  - 2D Places Layer (MESH_PLACES): Contains 2D navigable surface segments. Each node has a unique ID, but the prefix varies by attribute type:
+    - Place2dNodeAttributes: use uppercase 'P' prefix (e.g., "P0"). Have a semantic class.
+    - TravNodeAttributes: use lowercase 't' prefix (e.g., "t1"). Have radii and traversability states instead of a semantic class.
+
+  - Rooms Layer (ROOMS): Contains rooms or higher-level regions. Each Room has a unique ID with an 'R' prefix (e.g., "R0") and a semantic class.
+
+  - Buildings Layer (BUILDINGS): Contains building-level structures. Each Building has a unique ID with a 'B' prefix (e.g., "B0").
+
+  - Agents Layer (AGENTS): May contain robot pose history. Not typically loaded into Neo4j.
+
+  - Traversability Layer (TRAVERSABILITY): May contain traversability grid data. Not typically loaded into Neo4j.
+
+  A graph can have any combination of these layers. Common configurations:
+  - Objects + MeshPlaces (Place2dNodeAttributes) + Rooms: older scene graphs
+  - Objects (KhronosObjectAttributes) + MeshPlaces (TravNodeAttributes): newer scene graphs
+  - Objects + Places + Rooms + Buildings: full hierarchy
+
+  Hierarchy: An Object's parent is always a Place or Mesh Place. A Place or Mesh Place's parent is always a Room. A Room's parent is always a Building. To find all objects in a room, you must traverse the CONTAINS edges transitively.
+
+  TIP: To check what layers and node types are present in a specific graph, run:
+      MATCH (n) RETURN DISTINCT labels(n) AS layer, n.attr_type AS type, count(*) AS count
+  </Scene Graph Description>

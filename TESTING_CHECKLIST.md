@@ -93,10 +93,14 @@
 - [ ] Select nodes from different layers → dialog shows appropriate filter options
 
 ## Boundary Visualization
-- [ ] After creating a Room via Draw Region, the Room's polygon boundary is visible
-- [ ] Boundary shown as semi-transparent overlay with dashed border
-- [ ] Uncheck "Rooms" in layer panel → boundary overlay disappears
-- [ ] Re-check → boundary reappears
+- [ ] **Room**: after creating via Draw Region, polygon boundary overlay visible
+- [ ] **Room**: rooms with bounding box but no polygon show a rectangle overlay
+- [ ] **TravNode (MeshPlace)**: polar polygon boundaries visible (from radii data)
+- [ ] **Object**: bounding box rectangles visible as overlays
+- [ ] All boundaries: semi-transparent fill with dashed border, colored by layer
+- [ ] Toggle layer visibility → boundaries hide/show per layer
+- [ ] Focus on subtree → only focused node boundaries visible
+- [ ] To switch TravNode boundaries between polar polygon and rectangle: change `USE_POLAR_BOUNDARY` in graph_view.py
 
 ## Snapshots
 - [ ] Snapshots panel visible in right dock (below Properties)

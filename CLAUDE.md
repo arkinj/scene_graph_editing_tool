@@ -25,6 +25,7 @@ src/sget/
 │   └── scene_graph_model.py # Central model: cache, Qt signals, selection
 ├── views/
 │   ├── graph_view.py       # QGraphicsView 2D spatial graph, polygon tool, focus, search
+│   ├── graph_items.py      # NodeItem and EdgeItem QGraphicsItem subclasses
 │   └── property_panel.py   # Node property editor with Apply button + lock toggle
 ├── widgets/
 │   ├── layer_panel.py      # Layer visibility toggles, node counts, Add/Delete buttons
@@ -34,7 +35,8 @@ src/sget/
 │   └── snapshot_panel.py   # Save/restore named scene graph snapshots
 └── utils/
     ├── colors.py           # Per-layer colors, styling — single source of truth for layer order
-    └── layout.py           # Spatial layout: x,-y projection from 3D node positions
+    ├── layout.py           # Spatial layout: x,-y projection from 3D node positions
+    └── boundary.py         # Boundary overlay rendering helpers (polygon, bbox, radii)
 tests/
 ├── test_neo4j_crud.py       # CRUD tests against live Neo4j (23 tests)
 ├── test_scene_graph_model.py # Model tests: CRUD, signals, selection, visibility (24 tests)
@@ -54,12 +56,16 @@ scripts/
 - **Per-node locking**: each NodeItem has a locked/unlocked state controlling drag. Property panel shows the toggle.
 - **Focus on subtree**: `model.get_descendants()` does BFS on CONTAINS edges; `graph_view.focus_on_node()` hides everything else. Layer toggles respect the focused set.
 - **Security**: `neo4j_crud.py` validates property names against `ALLOWED_PROPERTIES` whitelist before building dynamic Cypher SET clauses.
+- **Generic node handling**: heracles uses property-presence (not type-hardcoded) for node conversion. `attr_type` stored on every Neo4j node for reconstruction dispatch. Supports ObjectNodeAttributes, KhronosObjectAttributes, Place2dNodeAttributes, TravNodeAttributes, etc.
+- **Mesh file pointer**: source DSG file path stored as `_GraphMetadata` node in Neo4j. Snapshots can include mesh via `save_to_json(include_mesh=True)`.
+- **Multi-char categories**: `LAYER_STYLES.category_chars` is a tuple — MeshPlaces supports both 'P' and 't', Objects supports 'O' and 'o'.
 
 ## Dependencies (sibling repos under ~/software/mit/sget/)
 - **spark_dsg**: `~/software/mit/sget/Spark-DSG/python/` — scene graph library with Python bindings
 - **heracles**: `~/software/mit/sget/heracles/heracles/` — bridges spark_dsg ↔ Neo4j
 
 Do NOT reference copies of these repos from other locations.
+Do NOT commit to heracles or spark_dsg repos — the user manages commits to those repos directly.
 
 ## Virtual Environment
 ```bash

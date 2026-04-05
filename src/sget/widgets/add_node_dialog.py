@@ -32,30 +32,32 @@ from sget.utils.colors import LAYER_STYLES, STYLE_BY_LABEL
 def _next_node_symbol(model: SceneGraphModel, layer_label: str) -> str:
     """Generate the next available nodeSymbol for a layer.
 
-    Scans existing nodeSymbols in the cache to find the max index for this
-    layer's category character, then returns category + (max_index + 1).
+    Scans existing nodeSymbols in the cache across ALL known category
+    characters for the layer (e.g., both 'O' and 'o' for Objects, both
+    'P' and 't' for MeshPlaces), finds the max index, and returns
+    the first (default) category char + (max_index + 1).
 
-    For example, if Objects has O0, O2, O10, this returns "O(11)".
+    For example, if MeshPlaces has P0, P5, t1, t160, this returns "P(161)".
     """
     style = STYLE_BY_LABEL.get(layer_label)
     if style is None:
         raise ValueError(f"Unknown layer: {layer_label}")
 
-    cat = style.category_char
+    cats = style.category_chars
     max_idx = -1
 
     for ns in model.get_all_nodes():
-        # nodeSymbols look like "O0", "O(10)", "p1234", etc.
-        # Strip the category prefix and parentheses to get the index.
-        if ns.startswith(cat):
-            rest = ns[len(cat) :].strip("()")
-            try:
-                idx = int(rest)
-                max_idx = max(max_idx, idx)
-            except ValueError:
-                continue
+        for cat in cats:
+            if ns.startswith(cat):
+                rest = ns[len(cat) :].strip("()")
+                try:
+                    idx = int(rest)
+                    max_idx = max(max_idx, idx)
+                except ValueError:
+                    continue
 
-    return f"{cat}({max_idx + 1})"
+    # Use the first category char as the default for new nodes.
+    return f"{cats[0]}({max_idx + 1})"
 
 
 class AddNodeDialog(QDialog):
@@ -147,8 +149,12 @@ class AddNodeDialog(QDialog):
         }
 
         # Layer-specific properties.
-        if layer_label in (hc.OBJECTS, hc.ROOMS, hc.MESH_PLACES):
+        # Class is required for Objects and Rooms. For MeshPlaces it's
+        # optional — newer DSGs use TravNodeAttributes without semantic labels.
+        if layer_label in (hc.OBJECTS, hc.ROOMS):
             props["class"] = self._class_combo.currentText() or "unknown"
+        elif layer_label == hc.MESH_PLACES and self._class_combo.currentText():
+            props["class"] = self._class_combo.currentText()
 
         if layer_label == hc.OBJECTS:
             props["name"] = self._name_edit.text()

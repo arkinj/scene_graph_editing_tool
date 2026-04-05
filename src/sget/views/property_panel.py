@@ -139,6 +139,8 @@ class PropertyPanel(QWidget):
         self._form_layout.addRow(
             "Layer:", self._make_readonly(style.display_name if style else layer_label)
         )
+        if "attr_type" in props:
+            self._form_layout.addRow("Type:", self._make_readonly(props["attr_type"]))
 
         # --- Lock toggle (controls whether the node can be dragged) ---
         if self._graph_view is not None:
@@ -181,6 +183,23 @@ class PropertyPanel(QWidget):
             self._widgets["class"] = class_combo
             self._form_layout.addRow("Class:", class_combo)
 
+        # --- Radii (MeshPlaces with TravNodeAttributes) ---
+        if "min_radius" in props:
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 10000.0)
+            spin.setDecimals(4)
+            spin.setValue(float(props["min_radius"]))
+            self._widgets["min_radius"] = spin
+            self._form_layout.addRow("Min Radius:", spin)
+
+        if "max_radius" in props:
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 10000.0)
+            spin.setDecimals(4)
+            spin.setValue(float(props["max_radius"]))
+            self._widgets["max_radius"] = spin
+            self._form_layout.addRow("Max Radius:", spin)
+
         # --- Bounding box (Objects only) ---
         if "bbox_center" in props:
             bc = props["bbox_center"]
@@ -192,10 +211,36 @@ class PropertyPanel(QWidget):
             bd_widget, _ = self._make_vec3("bbox_dim", bd)
             self._form_layout.addRow("BBox Size:", bd_widget)
 
-        # --- Boundary (Rooms with polygon data) ---
+        # --- Boundary (Rooms with polygon data, or Place2d Point3D list) ---
         if "boundary_x" in props and "boundary_y" in props:
             n_verts = len(props["boundary_x"])
             self._form_layout.addRow("Boundary:", self._make_readonly(f"{n_verts} vertices"))
+        elif "boundary" in props and isinstance(props["boundary"], list):
+            self._form_layout.addRow(
+                "Boundary:", self._make_readonly(f"{len(props['boundary'])} points")
+            )
+
+        # --- Read-only info fields ---
+        if "color_r" in props:
+            rgb = f"({props['color_r']}, {props['color_g']}, {props['color_b']})"
+            self._form_layout.addRow("Color:", self._make_readonly(rgb))
+
+        if "registered" in props:
+            self._form_layout.addRow("Registered:", self._make_readonly(str(props["registered"])))
+
+        if "distance" in props:
+            self._form_layout.addRow("Distance:", self._make_readonly(f"{props['distance']:.4f}"))
+
+        if "is_active" in props:
+            self._form_layout.addRow("Active:", self._make_readonly(str(props["is_active"])))
+
+        if "first_observed_ns" in props:
+            val = props["first_observed_ns"]
+            display = str(val) if not isinstance(val, list) else f"[{len(val)} timestamps]"
+            self._form_layout.addRow("First Observed:", self._make_readonly(display))
+
+        if "radii" in props:
+            self._form_layout.addRow("Radii:", self._make_readonly(f"{len(props['radii'])} rays"))
 
         # --- Apply button ---
         self._apply_btn = QPushButton("Apply")
@@ -230,6 +275,10 @@ class PropertyPanel(QWidget):
 
         if "class" in self._widgets:
             updates["class"] = self._widgets["class"].currentText()
+
+        for radius_key in ("min_radius", "max_radius"):
+            if radius_key in self._widgets:
+                updates[radius_key] = self._widgets[radius_key].value()
 
         if updates:
             try:
