@@ -8,6 +8,9 @@ Implementation progress is tracked in the plan file ONLY:
 `~/.claude/plans/wondrous-moseying-wren.md`
 Do NOT add status annotations (DONE, TODO, etc.) to this file or any other file.
 
+## Development Practice
+At the start and end of each session, do a **meta-cognitive review**: check CLAUDE.md, the plan file, and memory files to verify they reflect current state. This prevents drift across context boundaries and keeps progress coherent.
+
 ## Tech Stack
 - **PySide6** — Qt GUI framework
 - **QGraphicsScene/QGraphicsView** — 2D hierarchical graph visualization
