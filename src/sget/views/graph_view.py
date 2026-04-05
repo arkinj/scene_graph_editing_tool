@@ -32,12 +32,8 @@ all feed into the same Group dialog:
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QWheelEvent
 from PySide6.QtWidgets import (
-    QGraphicsEllipseItem,
-    QGraphicsLineItem,
     QGraphicsPolygonItem,
-    QGraphicsRectItem,
     QGraphicsScene,
-    QGraphicsSimpleTextItem,
     QGraphicsView,
     QLineEdit,
     QMenu,
@@ -47,131 +43,24 @@ from PySide6.QtWidgets import (
 )
 
 from sget.backend.scene_graph_model import SceneGraphModel
-from sget.utils.colors import (
-    INTERLAYER_EDGE_COLOR,
-    INTRALAYER_EDGE_COLOR,
-    SELECTION_COLOR,
-    SELECTION_PEN_WIDTH,
-    STYLE_BY_LABEL,
+from sget.utils.boundary import (
+    make_bbox_overlay,
+    make_point3d_polygon_overlay,
+    make_polygon_overlay,
+    make_radii_polygon_overlay,
+    make_radii_rect_overlay,
 )
+from sget.utils.colors import STYLE_BY_LABEL
 from sget.utils.layout import DEFAULT_SCALE, compute_layout
-
-# Node circle radius in scene coordinates.
-NODE_RADIUS = 12
+from sget.views.graph_items import EdgeItem, NodeItem
 
 # Polygon drawing style.
 _POLYGON_FILL = QColor(100, 150, 255, 40)  # Semi-transparent blue
 _POLYGON_BORDER = QColor(100, 150, 255, 200)
 _POLYGON_PEN_WIDTH = 2
 
-
-class NodeItem(QGraphicsEllipseItem):
-    """Visual representation of a scene graph node.
-
-    Each node is a colored circle with a text label.  It is selectable
-    by clicking, and optionally draggable when positions are unlocked.
-
-    When dragged, connected edges are updated in real time via the
-    ``ItemSendsGeometryChanges`` flag and ``itemChange`` override.
-    The actual model update (writing to Neo4j) happens on mouse release,
-    handled by the parent GraphView.
-    """
-
-    def __init__(self, node_symbol: str, layer_label: str, display_text: str, x: float, y: float):
-        r = NODE_RADIUS
-        super().__init__(-r, -r, 2 * r, 2 * r)
-        self.node_symbol = node_symbol
-        self.layer_label = layer_label
-
-        # Position in scene coordinates.
-        self.setPos(x, y)
-
-        # Styling based on layer.
-        style = STYLE_BY_LABEL.get(layer_label)
-        color = QColor(style.color) if style else QColor("#888888")
-        self.setBrush(QBrush(color))
-        self._default_pen = QPen(Qt.black, 1)
-        self.setPen(self._default_pen)
-
-        # Tooltip for hover.
-        self.setToolTip(f"{layer_label}: {node_symbol}")
-
-        # Make it selectable (QGraphicsView handles click events).
-        self.setFlag(QGraphicsEllipseItem.ItemIsSelectable, True)
-        # Enable geometry change notifications so we can update edges during drag.
-        self.setFlag(QGraphicsEllipseItem.ItemSendsGeometryChanges, True)
-
-        # Per-node lock state — locked by default (not draggable).
-        self._locked = True
-
-        # Text label below the circle.
-        self._label = QGraphicsSimpleTextItem(display_text, self)
-        self._label.setPos(-r, r + 2)
-        font = self._label.font()
-        font.setPointSize(7)
-        self._label.setFont(font)
-
-    @property
-    def locked(self) -> bool:
-        return self._locked
-
-    def set_locked(self, locked: bool):
-        self._locked = locked
-        self.setFlag(QGraphicsEllipseItem.ItemIsMovable, not locked)
-
-    def set_highlighted(self, highlighted: bool):
-        """Toggle selection highlight."""
-        if highlighted:
-            self.setPen(QPen(QColor(SELECTION_COLOR), SELECTION_PEN_WIDTH))
-        else:
-            self.setPen(self._default_pen)
-
-    def itemChange(self, change, value):
-        """Update connected edges in real time while dragging."""
-        if change == QGraphicsEllipseItem.ItemPositionHasChanged:
-            # Find the parent GraphView and ask it to reposition edges.
-            scene = self.scene()
-            if scene:
-                for view in scene.views():
-                    if hasattr(view, "_graph_view"):
-                        view._graph_view._update_edges_for_node(self.node_symbol)
-                        break
-        return super().itemChange(change, value)
-
-
-class EdgeItem(QGraphicsLineItem):
-    """Visual representation of an edge between two nodes.
-
-    Intralayer edges (sibling connections) are drawn as solid darker lines.
-    Interlayer edges (CONTAINS) are drawn as dashed lighter lines, visually
-    de-emphasizing the dense parent-child connectivity.
-    """
-
-    def __init__(self, from_item: NodeItem, to_item: NodeItem, is_interlayer: bool):
-        super().__init__()
-        self.from_symbol = from_item.node_symbol
-        self.to_symbol = to_item.node_symbol
-        self.is_interlayer = is_interlayer
-
-        if is_interlayer:
-            pen = QPen(QColor(INTERLAYER_EDGE_COLOR), 1, Qt.DashLine)
-        else:
-            pen = QPen(QColor(INTRALAYER_EDGE_COLOR), 1.5, Qt.SolidLine)
-        self.setPen(pen)
-
-        # Draw line between node centers.
-        self.setLine(
-            from_item.pos().x(),
-            from_item.pos().y(),
-            to_item.pos().x(),
-            to_item.pos().y(),
-        )
-
-        # Edges should be behind nodes.
-        self.setZValue(-1)
-
-        # Make edges selectable for deletion.
-        self.setFlag(QGraphicsLineItem.ItemIsSelectable, True)
+# NodeItem and EdgeItem are defined in views/graph_items.py.
+# Boundary overlay helpers are in utils/boundary.py.
 
 
 class GraphView(QWidget):
@@ -973,16 +862,16 @@ class GraphView(QWidget):
                 if "boundary_x" in props and "boundary_y" in props:
                     bx, by = props["boundary_x"], props["boundary_y"]
                     if len(bx) >= 3:
-                        item = self._make_polygon_overlay(bx, by, color, S)
+                        item = make_polygon_overlay(bx, by, color, S)
                 elif "bbox_l" in props:
-                    item = self._make_bbox_overlay(props, color, S)
+                    item = make_bbox_overlay(props, color, S)
 
             # TravNode: polar polygon from radii, or rectangle
             elif "radii" in props and props["radii"]:
                 if self.USE_POLAR_BOUNDARY:
-                    item = self._make_radii_polygon_overlay(props, color, S)
+                    item = make_radii_polygon_overlay(props, color, S)
                 else:
-                    item = self._make_radii_rect_overlay(props, color, S)
+                    item = make_radii_rect_overlay(props, color, S)
 
             # Place2d: polygon from Point3D list
             elif (
@@ -990,11 +879,11 @@ class GraphView(QWidget):
                 and isinstance(props["boundary"], list)
                 and len(props["boundary"]) >= 3
             ):
-                item = self._make_point3d_polygon_overlay(props["boundary"], color, S)
+                item = make_point3d_polygon_overlay(props["boundary"], color, S)
 
             # Object: bounding box rectangle
             elif layer_label == hc.OBJECTS and "bbox_l" in props:
-                item = self._make_bbox_overlay(props, color, S)
+                item = make_bbox_overlay(props, color, S)
 
             if item:
                 item.setZValue(-2)
@@ -1002,63 +891,6 @@ class GraphView(QWidget):
                 self._boundary_items[ns] = item
                 if not self._model.is_layer_visible(layer_label):
                     item.setVisible(False)
-
-    def _style_overlay(self, item, color):
-        """Apply consistent semi-transparent styling to a boundary overlay."""
-        fill = QColor(color)
-        fill.setAlpha(30)
-        item.setBrush(QBrush(fill))
-        item.setPen(QPen(color, 1.5, Qt.DashLine))
-        return item
-
-    def _make_polygon_overlay(self, bx, by, color, scale):
-        """Polygon from flat x/y lists (Room Draw Region)."""
-        points = [QPointF(x * scale, -y * scale) for x, y in zip(bx, by)]
-        item = QGraphicsPolygonItem(QPolygonF(points))
-        return self._style_overlay(item, color)
-
-    def _make_bbox_overlay(self, props, color, scale):
-        """Rectangle from bbox center + dimensions."""
-        cx = float(props["bbox_x"]) * scale
-        cy = -float(props["bbox_y"]) * scale
-        w = float(props["bbox_l"]) * scale
-        h = float(props["bbox_w"]) * scale
-        item = QGraphicsRectItem(cx - w / 2, cy - h / 2, w, h)
-        return self._style_overlay(item, color)
-
-    def _make_radii_polygon_overlay(self, props, color, scale):
-        """Polar polygon from TravNode radii (N rays at equal angles)."""
-        import math
-
-        cx = float(props["center"][0]) * scale
-        cy = -float(props["center"][1]) * scale
-        radii = props["radii"]
-        n = len(radii)
-        points = []
-        for i, r in enumerate(radii):
-            angle = 2 * math.pi * i / n
-            points.append(
-                QPointF(
-                    cx + r * scale * math.cos(angle),
-                    cy - r * scale * math.sin(angle),
-                )
-            )
-        item = QGraphicsPolygonItem(QPolygonF(points))
-        return self._style_overlay(item, color)
-
-    def _make_radii_rect_overlay(self, props, color, scale):
-        """Rectangle from TravNode max_radius."""
-        cx = float(props["center"][0]) * scale
-        cy = -float(props["center"][1]) * scale
-        r = float(props.get("max_radius", 1.0)) * scale
-        item = QGraphicsRectItem(cx - r, cy - r, 2 * r, 2 * r)
-        return self._style_overlay(item, color)
-
-    def _make_point3d_polygon_overlay(self, boundary_points, color, scale):
-        """Polygon from Neo4j Point3D list (Place2d boundary)."""
-        points = [QPointF(float(pt[0]) * scale, -float(pt[1]) * scale) for pt in boundary_points]
-        item = QGraphicsPolygonItem(QPolygonF(points))
-        return self._style_overlay(item, color)
 
     # ------------------------------------------------------------------
     # Export to image

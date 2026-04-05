@@ -1,0 +1,63 @@
+interface_description: |
+  Labels in Database:
+      - Object: a node representing an object in the world.
+          - nodeSymbol: a unique string identifier (e.g., "O0", "o5")
+          - attr_type: the attribute type (e.g., "ObjectNodeAttributes", "KhronosObjectAttributes")
+          - class: a string identifying the object's semantic class or type (e.g., "tree", "box")
+          - center: the 3D position of the object, as a POINT type
+          - name: an optional human-readable name
+          - bbox_center: the center of the bounding box, as a POINT type
+          - bbox_dim: the dimensions of the bounding box (length, width, height), as a POINT type
+          - color_r, color_g, color_b: RGB color values (0-255)
+          - registered: boolean indicating if the object is a known object
+          - is_active: boolean indicating if the node is in the active window
+          - first_observed_ns, last_observed_ns: observation timestamps (may be int or list of ints)
+
+      - MeshPlace: a node representing a 2D segment of space the robot might be able to move to.
+          - nodeSymbol: a unique string identifier (e.g., "P0" or "t1" — the prefix varies)
+          - attr_type: the attribute type (e.g., "Place2dNodeAttributes", "TravNodeAttributes")
+          - center: the 3D position of the mesh place, as a POINT type
+          - class: a string identifying the semantic class (ONLY present on Place2dNodeAttributes, NOT on TravNodeAttributes)
+          - radii: a list of floats representing boundary ray lengths (ONLY on TravNodeAttributes)
+          - states: a list of ints representing traversability states per ray (ONLY on TravNodeAttributes)
+          - min_radius, max_radius: boundary approximation floats (ONLY on TravNodeAttributes)
+          - is_active: boolean
+
+      - Place: a node representing a 3D region of free space.
+          - nodeSymbol: a unique string identifier (e.g., "p0")
+          - attr_type: the attribute type (typically "PlaceNodeAttributes")
+          - center: the 3D position of the place, as a POINT type
+          - distance: float, distance to nearest obstacle
+
+      - Room: a node representing a room or higher-level region.
+          - nodeSymbol: a unique string identifier (e.g., "R0")
+          - attr_type: the attribute type (typically "RoomNodeAttributes")
+          - class: a string identifying the room's semantic class or type
+          - center: the 3D position of the room, as a POINT type
+          - boundary_x, boundary_y: optional lists of floats defining a polygon boundary
+
+      - Building: a node representing a building-level container.
+          - nodeSymbol: a unique string identifier (e.g., "B0")
+          - center: the 3D position, as a POINT type
+
+  All nodes also have:
+      - attr_type: a string identifying the spark_dsg attribute class (useful for distinguishing node types within the same layer)
+      - is_active, is_predicted: booleans
+
+  IMPORTANT: Not all nodes have the same properties. Different scene graphs use different attribute types. For example, some MeshPlace nodes have "class" and some have "radii" instead. Always check what properties a node has before assuming they exist.
+
+  TIP: To discover what properties exist on nodes in a given layer, run:
+      MATCH (n:MeshPlace) RETURN keys(n) AS props LIMIT 1
+  Or to see what attr_types are present:
+      MATCH (n:MeshPlace) RETURN DISTINCT n.attr_type
+
+  Object, MeshPlace, Place, Room, and Building are all Cypher labels attached to nodes.
+
+  Places and Mesh Places represent a higher level of the hierarchy compared to objects, but lower level than rooms.
+
+  There are two kinds of existing edges. First is (a)-[:CONTAINS]->(b), which connects nodes between different layers and means that b is contained within a. Nodes in higher levels of the hierarchy may contain nodes in lower levels of the hierarchy, but nodes in the lower level of the hierarchy will not contain higher-level nodes. The other kind of edges represent connectivity within a layer: [:OBJECT_CONNECTED], [:PLACE_CONNECTED], [:MESH_PLACE_CONNECTED], [:ROOM_CONNECTED], [:BUILDING_CONNECTED].
+  Remember that (a)-[:CONTAINS*]->(b) will match transitive relationships.
+
+  There may also be a _GraphMetadata node with key='source' that stores the file_path of the original scene graph file.
+
+  Note that in the current version of cypher, `distance` has been replaced by `point.distance`. Also, do not use any apoc functions in your queries.
