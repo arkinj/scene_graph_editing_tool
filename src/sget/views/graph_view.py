@@ -469,7 +469,7 @@ class GraphView(QWidget):
                         )
 
     def _on_node_removed(self, node_symbol: str, layer_label: str):
-        """Remove a single node and its connected edges from the scene."""
+        """Remove a single node, its connected edges, and boundary overlay."""
         item = self._node_items.pop(node_symbol, None)
         if item is not None:
             self._scene.removeItem(item)
@@ -480,6 +480,11 @@ class GraphView(QWidget):
             edge_item = self._edge_items.pop(key, None)
             if edge_item is not None:
                 self._scene.removeItem(edge_item)
+
+        # Remove boundary overlay if one exists for this node.
+        boundary_item = self._boundary_items.pop(node_symbol, None)
+        if boundary_item is not None:
+            self._scene.removeItem(boundary_item)
 
     def _on_edge_added(self, from_symbol: str, to_symbol: str, edge_type: str):
         """Add a single edge item to the scene."""

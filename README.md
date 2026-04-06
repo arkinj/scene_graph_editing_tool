@@ -34,7 +34,8 @@ source ~/software/mit/virtual-envs/sget/bin/activate
 # Install spark_dsg (C++ build, requires cmake + libeigen3-dev)
 pip install -e ../Spark-DSG/
 
-# Install heracles
+# Install heracles (use the robust-node-handling branch for TravNodeAttributes support)
+cd ../heracles && git checkout robust-node-handling && cd -
 pip install -e ../heracles/heracles/
 
 # Install SGET

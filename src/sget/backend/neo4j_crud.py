@@ -268,17 +268,37 @@ _CREATE_DISPATCH = {
     constants.BUILDINGS: create_building,
 }
 
+# Default attr_type per layer — used when creating new nodes so that
+# heracles can reconstruct them during snapshot export.
+_DEFAULT_ATTR_TYPE = {
+    constants.OBJECTS: "ObjectNodeAttributes",
+    constants.PLACES: "PlaceNodeAttributes",
+    constants.MESH_PLACES: "TravNodeAttributes",
+    constants.ROOMS: "RoomNodeAttributes",
+    constants.BUILDINGS: "NodeAttributes",
+}
+
 
 def create_node(db: Neo4jWrapper, layer_label: str, node_symbol: str, props: dict):
     """Create a single node in the given layer.
 
     Dispatches to the appropriate per-layer function based on ``layer_label``
     (one of the heracles.constants label strings: "Object", "Place", etc.).
+    Sets attr_type so heracles can reconstruct the node during export.
     """
     create_fn = _CREATE_DISPATCH.get(layer_label)
     if create_fn is None:
         raise ValueError(f"Unknown layer label: {layer_label!r}")
     create_fn(db, node_symbol, props)
+
+    # Ensure attr_type is set for round-trip fidelity.
+    attr_type = props.get("attr_type") or _DEFAULT_ATTR_TYPE.get(layer_label)
+    if attr_type:
+        db.execute(
+            f"MATCH (n:{layer_label} {{nodeSymbol: $ns}}) SET n.attr_type = $at",
+            ns=node_symbol,
+            at=attr_type,
+        )
 
 
 # ---------------------------------------------------------------------------
