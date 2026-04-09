@@ -166,6 +166,7 @@ class PropertyPanel(QWidget):
         # --- Class (Objects, Rooms, MeshPlaces) ---
         if "class" in props:
             class_combo = QComboBox()
+            class_combo.setEditable(True)
             # Populate with known labels from the model's labelspace.
             current_class = str(props["class"])
             labels = self._model.get_object_labels()
@@ -274,7 +275,14 @@ class PropertyPanel(QWidget):
             updates["name"] = self._widgets["name"].text()
 
         if "class" in self._widgets:
-            updates["class"] = self._widgets["class"].currentText()
+            class_name = self._widgets["class"].currentText()
+            updates["class"] = class_name
+            # Register the label if the user typed a new one.
+            layer_label = self._model.get_node_layer(self._current_symbol)
+            if layer_label == hc.ROOMS:
+                self._model.add_room_label(class_name)
+            elif layer_label in (hc.OBJECTS, hc.MESH_PLACES):
+                self._model.add_object_label(class_name)
 
         for radius_key in ("min_radius", "max_radius"):
             if radius_key in self._widgets:

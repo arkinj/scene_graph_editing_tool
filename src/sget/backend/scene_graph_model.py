@@ -166,37 +166,30 @@ class SceneGraphModel(QObject):
     def load_from_json(self, path: str):
         """Load a scene graph JSON file into Neo4j and populate the cache.
 
-        Flow: JSON → spark_dsg.DynamicSceneGraph.load() → inject metadata
-        required by heracles → heracles.initialize_db() + spark_dsg_to_db()
+        Flow: JSON → spark_dsg.DynamicSceneGraph.load() → extract embedded
+        labelspaces → heracles.initialize_db() + spark_dsg_to_db()
         → populate in-memory cache from Neo4j → emit graph_loaded.
 
         The DSG object is transient — we don't keep it around.  Neo4j is the
         live store; the cache is the fast read path.
 
-        Heracles' ``spark_dsg_to_db()`` requires two metadata entries on the
-        DSG object:
-        1. ``"labelspace"`` — {str(semantic_id): label_name} for objects
-        2. ``"LayerIdToHeraclesLayerStr"`` — {layer_id: heracles_label}
-
-        These are injected from the model's labelspace state (set via
-        ``set_labelspaces()`` or CLI args) rather than extracted from the DSG
-        file, because DSG files use inconsistent metadata formats.
+        Labelspaces are read from the DSG's embedded metadata
+        (``metadata["labelspaces"]``). The model's labelspace dicts are
+        updated to match so the UI dropdowns reflect what's in the file.
         """
         if self._db is None:
             raise RuntimeError("Not connected to Neo4j")
 
         dsg = spark_dsg.DynamicSceneGraph.load(path)
 
-        # Inject the metadata heracles needs for bulk load.
-        # Build the labelspace in heracles' expected format: {str(id): name}.
-        heracles_labelspace = {str(sid): name for name, sid in self._label_to_semantic_id.items()}
-        dsg.metadata.add({"labelspace": heracles_labelspace})
+        # Extract embedded labelspaces and update the model's dicts.
+        from heracles.utils import extract_labelspaces_from_dsg
 
-        if self._room_label_to_semantic_id:
-            heracles_room_labelspace = {
-                str(sid): name for name, sid in self._room_label_to_semantic_id.items()
-            }
-            dsg.metadata.add({"room_labelspace": heracles_room_labelspace})
+        obj_ls, room_ls = extract_labelspaces_from_dsg(dsg)
+        if obj_ls is not None:
+            self._label_to_semantic_id = {name: int(sid) for sid, name in obj_ls.items()}
+        if room_ls is not None:
+            self._room_label_to_semantic_id = {name: int(sid) for sid, name in room_ls.items()}
 
         dsg.metadata.add({"LayerIdToHeraclesLayerStr": _DEFAULT_LAYER_ID_TO_HERACLES})
 
@@ -592,3 +585,25 @@ class SceneGraphModel(QObject):
             self._label_to_semantic_id = dict(object_labels)
         if room_labels is not None:
             self._room_label_to_semantic_id = dict(room_labels)
+
+    def add_object_label(self, name: str) -> int:
+        """Register a new object/mesh_place label, assigning the next semantic ID.
+
+        No-op if the label already exists. Returns the semantic ID.
+        """
+        if name in self._label_to_semantic_id:
+            return self._label_to_semantic_id[name]
+        next_id = max(self._label_to_semantic_id.values(), default=-1) + 1
+        self._label_to_semantic_id[name] = next_id
+        return next_id
+
+    def add_room_label(self, name: str) -> int:
+        """Register a new room label, assigning the next semantic ID.
+
+        No-op if the label already exists. Returns the semantic ID.
+        """
+        if name in self._room_label_to_semantic_id:
+            return self._room_label_to_semantic_id[name]
+        next_id = max(self._room_label_to_semantic_id.values(), default=-1) + 1
+        self._room_label_to_semantic_id[name] = next_id
+        return next_id

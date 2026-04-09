@@ -4,18 +4,14 @@ Application entry point for SGET.
 Parses CLI arguments, connects to Neo4j, optionally loads a JSON scene graph,
 and launches the main window.
 
-The labelspace arguments (--object-labelspace, --room-labelspace) specify
-YAML files that map semantic label IDs to human-readable class names (e.g.,
-``{34: "box", 2: "tree"}``).  These are required by heracles' bulk load to
-populate the ``class`` property on Neo4j nodes.  If not provided, they
-default to heracles' bundled labelspace files.
+Labelspaces are read from the DSG file's embedded metadata. No external
+YAML files are needed.
 """
 
 import argparse
 import os
 import sys
 
-from heracles.utils import get_labelspace
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from sget.backend.scene_graph_model import SceneGraphModel
@@ -52,16 +48,6 @@ def parse_args():
         default=None,
         help="Path to a scene graph JSON file to load on startup",
     )
-    parser.add_argument(
-        "--object-labelspace",
-        default="ade20k_mit_label_space.yaml",
-        help="YAML labelspace file for objects (default: heracles bundled ade20k)",
-    )
-    parser.add_argument(
-        "--room-labelspace",
-        default="b45_label_space.yaml",
-        help="YAML labelspace file for rooms (default: heracles bundled b45)",
-    )
     return parser.parse_args()
 
 
@@ -78,20 +64,8 @@ def main():
         QMessageBox.critical(None, "Neo4j Connection Error", str(e))
         sys.exit(1)
 
-    # Load labelspaces so heracles can map semantic IDs to class names.
-    try:
-        object_labels = get_labelspace(args.object_labelspace)
-        room_labels = get_labelspace(args.room_labelspace)
-    except Exception as e:
-        QMessageBox.critical(None, "Labelspace Error", f"Failed to load labelspace: {e}")
-        sys.exit(1)
-    # get_labelspace returns {int_id: str_name}; model wants {str_name: int_id}.
-    model.set_labelspaces(
-        object_labels={v: k for k, v in object_labels.items()},
-        room_labels={v: k for k, v in room_labels.items()},
-    )
-
     # Create and show the main window.
+    # Labelspaces are extracted from the DSG file during load_from_json().
     window = MainWindow(model)
     window.show()
 

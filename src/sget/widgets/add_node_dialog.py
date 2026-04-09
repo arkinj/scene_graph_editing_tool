@@ -152,9 +152,17 @@ class AddNodeDialog(QDialog):
         # Class is required for Objects and Rooms. For MeshPlaces it's
         # optional — newer DSGs use TravNodeAttributes without semantic labels.
         if layer_label in (hc.OBJECTS, hc.ROOMS):
-            props["class"] = self._class_combo.currentText() or "unknown"
+            class_name = self._class_combo.currentText() or "unknown"
+            props["class"] = class_name
+            # Register the label if the user typed a new one.
+            if layer_label == hc.ROOMS:
+                self._model.add_room_label(class_name)
+            else:
+                self._model.add_object_label(class_name)
         elif layer_label == hc.MESH_PLACES and self._class_combo.currentText():
-            props["class"] = self._class_combo.currentText()
+            class_name = self._class_combo.currentText()
+            props["class"] = class_name
+            self._model.add_object_label(class_name)
 
         if layer_label == hc.OBJECTS:
             props["name"] = self._name_edit.text()

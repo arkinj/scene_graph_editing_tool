@@ -230,10 +230,17 @@ class GroupDialog(QDialog):
         }
 
         if parent_label in (hc.ROOMS, hc.MESH_PLACES):
-            parent_props["class"] = self._class_combo.currentText() or "unknown"
+            class_name = self._class_combo.currentText() or "unknown"
+            parent_props["class"] = class_name
+            if parent_label == hc.ROOMS:
+                self._model.add_room_label(class_name)
+            else:
+                self._model.add_object_label(class_name)
 
         if parent_label == hc.OBJECTS:
-            parent_props["class"] = self._class_combo.currentText() or "unknown"
+            class_name = self._class_combo.currentText() or "unknown"
+            parent_props["class"] = class_name
+            self._model.add_object_label(class_name)
             parent_props["name"] = self._name_edit.text()
             parent_props["bbox_x"] = centroid[0]
             parent_props["bbox_y"] = centroid[1]

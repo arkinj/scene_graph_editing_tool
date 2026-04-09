@@ -146,9 +146,23 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
+        # Ask whether to include mesh data (makes the file self-contained but larger).
+        include_mesh = (
+            QMessageBox.question(
+                self,
+                "Include Mesh?",
+                "Include mesh data in the saved file?\n\n"
+                "This copies the mesh from the source file, making the export "
+                "self-contained but significantly larger.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            == QMessageBox.Yes
+        )
+
         try:
             self.statusBar().showMessage(f"Saving {path}...")
-            self._model.save_to_json(path)
+            self._model.save_to_json(path, include_mesh=include_mesh)
             self.statusBar().showMessage(f"Saved to {path}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
