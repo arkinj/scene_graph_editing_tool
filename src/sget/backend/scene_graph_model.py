@@ -216,12 +216,26 @@ class SceneGraphModel(QObject):
         if self._db is None:
             raise RuntimeError("Not connected to Neo4j")
 
-        # Build the mapping dicts that db_to_spark_dsg requires.
-        spark_layer_id_to_name = {layer_id: label for label, layer_id in LAYER_ORDER}
-        label_to_sid = {name: sid for name, sid in self._label_to_semantic_id.items()}
-        room_label_to_sid = {name: sid for name, sid in self._room_label_to_semantic_id.items()}
+        # Update labelspaces in Neo4j so db_to_spark_dsg() picks up any
+        # labels added at runtime (via add_object_label / add_room_label).
+        if self._label_to_semantic_id:
+            ids = list(self._label_to_semantic_id.values())
+            names = list(self._label_to_semantic_id.keys())
+            self._db.execute(
+                "MERGE (m:_Labelspace {layer: 'object'}) SET m.ids = $ids, m.names = $names",
+                ids=ids,
+                names=names,
+            )
+        if self._room_label_to_semantic_id:
+            ids = list(self._room_label_to_semantic_id.values())
+            names = list(self._room_label_to_semantic_id.keys())
+            self._db.execute(
+                "MERGE (m:_Labelspace {layer: 'room'}) SET m.ids = $ids, m.names = $names",
+                ids=ids,
+                names=names,
+            )
 
-        dsg = db_to_spark_dsg(self._db, spark_layer_id_to_name, label_to_sid, room_label_to_sid)
+        dsg = db_to_spark_dsg(self._db)
 
         if include_mesh:
             source_path = self.get_source_file_path()
