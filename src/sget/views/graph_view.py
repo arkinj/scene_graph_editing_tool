@@ -87,6 +87,9 @@ class GraphView(QWidget):
         # Boundary overlay items for Rooms with polygon data.
         self._boundary_items: dict[str, QGraphicsPolygonItem] = {}
 
+        # Mesh background image — rasterized from DSG mesh data on load.
+        self._mesh_pixmap_item = None
+
         # Focused subtree state — when set, only these nodes are visible.
         self._focused_set: set[str] | None = None
 
@@ -386,6 +389,10 @@ class GraphView(QWidget):
         self._node_items = {}
         self._edge_items = {}
         self._boundary_items = {}
+        self._mesh_pixmap_item = None
+
+        # Render mesh as a background image (added first so it's behind everything).
+        self._render_mesh_background()
 
         nodes = self._model.get_all_nodes()
         node_layers = {ns: self._model.get_node_layer(ns) for ns in nodes}
@@ -837,6 +844,45 @@ class GraphView(QWidget):
 
     # Set to True to use polar polygon for TravNode boundaries,
     # False to use a simple rectangle from max_radius.
+    def _render_mesh_background(self):
+        """Rasterize the DSG mesh and add it as a background image in the scene."""
+        verts, colors, faces = self._model.get_mesh_data()
+        if verts is None:
+            return
+
+        from sget.utils.mesh_rasterizer import rasterize_mesh
+
+        # Resolution was determined during load_from_json() (before the slow
+        # bulk load) so the user dialog appeared quickly.
+        ppu = self._model.get_mesh_pixels_per_unit()
+
+        image, origin_x, origin_y, pixels_per_unit = rasterize_mesh(
+            verts, colors, faces, pixels_per_unit=ppu
+        )
+
+        from PySide6.QtGui import QPixmap
+
+        pixmap = QPixmap.fromImage(image)
+        self._mesh_pixmap_item = self._scene.addPixmap(pixmap)
+
+        # Position the pixmap's top-left at the mesh bounding box origin.
+        self._mesh_pixmap_item.setPos(origin_x, origin_y)
+
+        # Scale from pixel coords back to scene coords.  At pixels_per_unit=1.0
+        # this is a no-op; at higher values it shrinks the image to fit.
+        self._mesh_pixmap_item.setScale(1.0 / pixels_per_unit)
+
+        # Place behind all other items.
+        self._mesh_pixmap_item.setZValue(-100)
+
+        # Default to semi-transparent so nodes are visible on top.
+        self._mesh_pixmap_item.setOpacity(0.5)
+
+    def set_mesh_opacity(self, opacity: float):
+        """Set the mesh background image opacity (0.0 = invisible, 1.0 = opaque)."""
+        if self._mesh_pixmap_item is not None:
+            self._mesh_pixmap_item.setOpacity(opacity)
+
     # Toggle this to compare the two representations visually.
     USE_POLAR_BOUNDARY = True
 

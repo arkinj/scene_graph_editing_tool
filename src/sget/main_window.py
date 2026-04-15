@@ -85,6 +85,11 @@ class MainWindow(QMainWindow):
         self._layer_panel._add_btn.clicked.connect(self._add_node)
         self._layer_panel._delete_btn.clicked.connect(self._graph_view.delete_selected)
 
+        # Mesh opacity slider → graph view.
+        self._layer_panel._mesh_slider.valueChanged.connect(
+            lambda val: self._graph_view.set_mesh_opacity(val / 100.0)
+        )
+
     def _setup_menus(
         self, layer_dock: QDockWidget, property_dock: QDockWidget, snapshot_dock: QDockWidget
     ):

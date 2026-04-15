@@ -123,6 +123,12 @@ class SceneGraphModel(QObject):
         self._node_layers: dict[str, str] = {}  # node_symbol -> layer_label
         self._edges: list[dict] = []
 
+        # Mesh data — extracted from the DSG on load for 2D visualization.
+        # Stored as projected 2D coordinates so the view doesn't need to reproject.
+        self._mesh_vertices_2d = None  # (N, 2) float array: (x*scale, -y*scale)
+        self._mesh_colors = None  # (N, 3) float array: RGB in [0, 1]
+        self._mesh_faces = None  # (3, M) int array: triangle vertex indices
+
         # Labelspace mappings — needed for heracles' bulk export.
         # label_to_semantic_id: {"box": 34, "tree": 2, ...}
         # room_label_to_semantic_id: {"lounge": 0, "hallway": 1, ...}
@@ -193,6 +199,14 @@ class SceneGraphModel(QObject):
 
         dsg.metadata.add({"LayerIdToHeraclesLayerStr": _DEFAULT_LAYER_ID_TO_HERACLES})
 
+        # Extract mesh data before the DSG object is discarded.
+        # Project to 2D using the same (x * scale, -y * scale) as node layout.
+        self._extract_mesh(dsg)
+
+        # Determine mesh rendering resolution before the slow bulk load,
+        # so the dialog appears quickly. The view reads this during rebuild.
+        self._mesh_pixels_per_unit = self._compute_mesh_resolution()
+
         # Push to Neo4j (clears existing data first).
         initialize_db(self._db)
         spark_dsg_to_db(dsg, self._db, source_file_path=path)
@@ -248,6 +262,79 @@ class SceneGraphModel(QObject):
                         dsg.mesh = source_dsg.mesh
 
         dsg.save(path, include_mesh=include_mesh)
+
+    def _extract_mesh(self, dsg):
+        """Extract mesh vertices, colors, and faces from the DSG for 2D rendering.
+
+        Projects vertex positions to 2D using the same (x * scale, -y * scale)
+        transform as the node layout.  The DSG object is discarded after load,
+        so this is the only chance to capture the mesh data.
+        """
+        import numpy as np
+
+        from sget.utils.layout import DEFAULT_SCALE
+
+        if not dsg.has_mesh():
+            self._mesh_vertices_2d = None
+            self._mesh_colors = None
+            self._mesh_faces = None
+            return
+
+        mesh = dsg.mesh
+        verts = mesh.get_vertices()  # (6, N): x, y, z, r, g, b
+        faces = mesh.get_faces()  # (3, M): triangle vertex indices
+
+        # Project to 2D scene coordinates.
+        xs = verts[0, :] * DEFAULT_SCALE
+        ys = -verts[1, :] * DEFAULT_SCALE
+        self._mesh_vertices_2d = np.column_stack([xs, ys])
+
+        # Vertex colors (RGB in [0, 1]).
+        self._mesh_colors = verts[3:6, :].T
+
+        self._mesh_faces = faces
+
+    def get_mesh_data(self):
+        """Return (vertices_2d, colors, faces) or (None, None, None) if no mesh."""
+        return self._mesh_vertices_2d, self._mesh_colors, self._mesh_faces
+
+    def get_mesh_pixels_per_unit(self):
+        """Return the resolved pixels-per-unit for mesh rendering."""
+        return getattr(self, "_mesh_pixels_per_unit", 1.0)
+
+    def _compute_mesh_resolution(self):
+        """Check mesh size and prompt the user if it exceeds the resolution cap.
+
+        Called during load_from_json() before the slow bulk load so the
+        dialog appears quickly.
+        """
+        if self._mesh_vertices_2d is None:
+            return 1.0
+
+        from sget.utils.mesh_rasterizer import MAX_DIM
+
+        width_px = int(self._mesh_vertices_2d[:, 0].max() - self._mesh_vertices_2d[:, 0].min())
+        height_px = int(self._mesh_vertices_2d[:, 1].max() - self._mesh_vertices_2d[:, 1].min())
+
+        if width_px <= MAX_DIM and height_px <= MAX_DIM:
+            return 1.0
+
+        from PySide6.QtWidgets import QMessageBox
+
+        mem_full = width_px * height_px * 4 / 1e6
+        reply = QMessageBox.question(
+            None,
+            "Large Mesh",
+            f"The mesh image would be {width_px} x {height_px} pixels "
+            f"({mem_full:.0f} MB).\n\n"
+            f"Render at full resolution? Selecting 'No' will cap the "
+            f"image at {MAX_DIM} pixels for faster loading.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            return 1.0
+        return MAX_DIM / max(width_px, height_px)
 
     def _refresh_cache(self):
         """Rebuild the in-memory cache from Neo4j.

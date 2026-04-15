@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -89,6 +90,19 @@ class LayerPanel(QWidget):
         self._interlayer_cb.setChecked(self._model.show_interlayer_edges)
         self._interlayer_cb.toggled.connect(self._model.set_interlayer_edges_visible)
         layout.addWidget(self._interlayer_cb)
+
+        # Mesh opacity slider — controls the background mesh image transparency.
+        mesh_row = QHBoxLayout()
+        mesh_label = QLabel("Mesh opacity:")
+        mesh_label.setStyleSheet("color: #888;")
+        mesh_row.addWidget(mesh_label)
+
+        self._mesh_slider = QSlider(Qt.Horizontal)
+        self._mesh_slider.setRange(0, 100)
+        self._mesh_slider.setValue(50)  # Default 50% opacity.
+        self._mesh_slider.setToolTip("Adjust mesh background transparency")
+        mesh_row.addWidget(self._mesh_slider)
+        layout.addLayout(mesh_row)
 
         # Refresh counts when the graph is loaded.
         self._model.graph_loaded.connect(self._update_counts)
