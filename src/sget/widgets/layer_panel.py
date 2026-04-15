@@ -91,11 +91,12 @@ class LayerPanel(QWidget):
         self._interlayer_cb.toggled.connect(self._model.set_interlayer_edges_visible)
         layout.addWidget(self._interlayer_cb)
 
-        # Mesh opacity slider — controls the background mesh image transparency.
+        # Mesh visibility toggle and opacity slider.
         mesh_row = QHBoxLayout()
-        mesh_label = QLabel("Mesh opacity:")
-        mesh_label.setStyleSheet("color: #888;")
-        mesh_row.addWidget(mesh_label)
+
+        self._mesh_cb = QCheckBox("Mesh")
+        self._mesh_cb.setChecked(True)
+        mesh_row.addWidget(self._mesh_cb)
 
         self._mesh_slider = QSlider(Qt.Horizontal)
         self._mesh_slider.setRange(0, 100)

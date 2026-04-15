@@ -878,6 +878,11 @@ class GraphView(QWidget):
         # Default to semi-transparent so nodes are visible on top.
         self._mesh_pixmap_item.setOpacity(0.5)
 
+    def set_mesh_visible(self, visible: bool):
+        """Show or hide the mesh background image."""
+        if self._mesh_pixmap_item is not None:
+            self._mesh_pixmap_item.setVisible(visible)
+
     def set_mesh_opacity(self, opacity: float):
         """Set the mesh background image opacity (0.0 = invisible, 1.0 = opaque)."""
         if self._mesh_pixmap_item is not None:
