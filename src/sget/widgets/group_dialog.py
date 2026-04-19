@@ -237,6 +237,15 @@ class GroupDialog(QDialog):
             else:
                 self._model.add_object_label(class_name)
 
+        # Default bounding box for Rooms — prevents zero bounding box on export.
+        if parent_label == hc.ROOMS:
+            parent_props["bbox_x"] = centroid[0]
+            parent_props["bbox_y"] = centroid[1]
+            parent_props["bbox_z"] = centroid[2]
+            parent_props["bbox_l"] = 1.0
+            parent_props["bbox_w"] = 1.0
+            parent_props["bbox_h"] = 1.0
+
         if parent_label == hc.OBJECTS:
             class_name = self._class_combo.currentText() or "unknown"
             parent_props["class"] = class_name

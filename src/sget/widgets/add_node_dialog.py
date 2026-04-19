@@ -57,7 +57,8 @@ def _next_node_symbol(model: SceneGraphModel, layer_label: str) -> str:
                     continue
 
     # Use the first category char as the default for new nodes.
-    return f"{cats[0]}({max_idx + 1})"
+    # Format without parentheses to match heracles' convention (e.g., O11 not O(11)).
+    return f"{cats[0]}{max_idx + 1}"
 
 
 class AddNodeDialog(QDialog):
@@ -127,9 +128,9 @@ class AddNodeDialog(QDialog):
 
         if labels:
             self._class_combo.addItems(sorted(labels.keys()))
-            self._class_combo.setEnabled(True)
-        else:
-            self._class_combo.setEnabled(False)
+        # Always keep the combo enabled — it's editable, so the user can
+        # type a new label even when no existing labels are available.
+        self._class_combo.setEnabled(True)
 
     def get_result(self) -> tuple[str, str, dict] | None:
         """Return (layer_label, node_symbol, props) or None if cancelled.
@@ -164,14 +165,17 @@ class AddNodeDialog(QDialog):
             props["class"] = class_name
             self._model.add_object_label(class_name)
 
-        if layer_label == hc.OBJECTS:
-            props["name"] = self._name_edit.text()
+        if layer_label in (hc.OBJECTS, hc.ROOMS):
             # Default bounding box at the node position with unit dimensions.
+            # Without this, RoomNodeAttributes exports a zero bounding box.
             props["bbox_x"] = props["pos_x"]
             props["bbox_y"] = props["pos_y"]
             props["bbox_z"] = props["pos_z"]
             props["bbox_l"] = 1.0
             props["bbox_w"] = 1.0
             props["bbox_h"] = 1.0
+
+        if layer_label == hc.OBJECTS:
+            props["name"] = self._name_edit.text()
 
         return layer_label, node_symbol, props

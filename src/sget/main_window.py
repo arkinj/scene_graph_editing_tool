@@ -52,24 +52,31 @@ class MainWindow(QMainWindow):
 
         # --- Right dock: property panel ---
         self._property_panel = PropertyPanel(model, graph_view=self._graph_view, parent=self)
-        property_dock = QDockWidget("Properties", self)
-        property_dock.setWidget(self._property_panel)
-        property_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        self.addDockWidget(Qt.RightDockWidgetArea, property_dock)
+        self._property_dock = QDockWidget("Properties", self)
+        self._property_dock.setWidget(self._property_panel)
+        self._property_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+        )
+        self.addDockWidget(Qt.RightDockWidgetArea, self._property_dock)
 
         # --- Right dock (below properties): snapshot panel ---
         self._snapshot_panel = SnapshotPanel(model, self)
-        snapshot_dock = QDockWidget("Snapshots", self)
-        snapshot_dock.setWidget(self._snapshot_panel)
-        snapshot_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        self.addDockWidget(Qt.RightDockWidgetArea, snapshot_dock)
+        self._snapshot_dock = QDockWidget("Snapshots", self)
+        self._snapshot_dock.setWidget(self._snapshot_panel)
+        self._snapshot_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+        )
+        self.addDockWidget(Qt.RightDockWidgetArea, self._snapshot_dock)
+
+        # Resize right docks when property panel content changes.
+        self._property_panel.height_requested.connect(self._resize_property_dock)
 
         # --- Menu bar ---
-        self._setup_menus(layer_dock, property_dock, snapshot_dock)
+        self._setup_menus(layer_dock, self._property_dock, self._snapshot_dock)
 
         # Set initial dock widths — wide enough for comboboxes but user can
         # resize freely afterward (no minimum constraint).
-        self.resizeDocks([property_dock], [250], Qt.Horizontal)
+        self.resizeDocks([self._property_dock], [250], Qt.Horizontal)
 
         # --- Status bar ---
         self.statusBar().showMessage("Ready")
@@ -297,6 +304,20 @@ class MainWindow(QMainWindow):
         """
         self._current_file = loaded_file_path
         self._snapshot_panel.set_snapshot_dir(loaded_file_path)
+
+    # Minimum height reserved for the snapshot dock (1-2 entries + buttons).
+    _SNAPSHOT_RESERVE = 120
+
+    def _resize_property_dock(self, desired_height: int):
+        """Resize right-column docks so the property panel fits its content."""
+        available = self.height() - self._SNAPSHOT_RESERVE
+        prop_height = min(desired_height, available)
+        snap_height = max(self._SNAPSHOT_RESERVE, self.height() - prop_height)
+        self.resizeDocks(
+            [self._property_dock, self._snapshot_dock],
+            [prop_height, snap_height],
+            Qt.Vertical,
+        )
 
     def _on_graph_loaded(self):
         nodes = sum(self._model.node_count(s.layer_label) for s in LAYER_STYLES)

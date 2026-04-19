@@ -206,7 +206,8 @@ def create_room(db: Neo4jWrapper, node_symbol: str, props: dict):
     """Create a single Room node.
 
     Required keys: pos_x/y/z, class.
-    Optional keys: boundary_x, boundary_y (lists of floats from polygon tool).
+    Optional keys: bbox_x/y/z + bbox_l/w/h (bounding box),
+                   boundary_x/boundary_y (polygon from Draw Region tool).
     """
     params = {
         "ns": node_symbol,
@@ -216,29 +217,39 @@ def create_room(db: Neo4jWrapper, node_symbol: str, props: dict):
         "cls": props["class"],
     }
 
-    # Base Cypher — always includes position and class.
+    # Optional bounding box — prevents RoomNodeAttributes from exporting
+    # a zero bounding box when the node is created via Add Node dialog.
+    bbox_clause = ""
+    if "bbox_x" in props:
+        bbox_clause = (
+            ",\n            bbox_center: point({x: $bbox_x, y: $bbox_y, z: $bbox_z}),"
+            "\n            bbox_dim: point({x: $bbox_l, y: $bbox_w, z: $bbox_h})"
+        )
+        params.update(
+            bbox_x=props["bbox_x"],
+            bbox_y=props["bbox_y"],
+            bbox_z=props["bbox_z"],
+            bbox_l=props["bbox_l"],
+            bbox_w=props["bbox_w"],
+            bbox_h=props["bbox_h"],
+        )
+
+    # Optional polygon boundary vertices (from Draw Region tool).
+    boundary_clause = ""
+    if "boundary_x" in props and "boundary_y" in props:
+        boundary_clause = (
+            ",\n            boundary_x: $boundary_x,\n            boundary_y: $boundary_y"
+        )
+        params["boundary_x"] = props["boundary_x"]
+        params["boundary_y"] = props["boundary_y"]
+
     query = f"""
         CREATE (n:{constants.ROOMS} {{
             nodeSymbol: $ns,
             center: point({{x: $pos_x, y: $pos_y, z: $pos_z}}),
-            class: $cls
+            class: $cls{bbox_clause}{boundary_clause}
         }})
     """
-
-    # Optionally store polygon boundary vertices (from Draw Region tool).
-    # These are flat lists of floats, stored as Neo4j list properties.
-    if "boundary_x" in props and "boundary_y" in props:
-        query = f"""
-            CREATE (n:{constants.ROOMS} {{
-                nodeSymbol: $ns,
-                center: point({{x: $pos_x, y: $pos_y, z: $pos_z}}),
-                class: $cls,
-                boundary_x: $boundary_x,
-                boundary_y: $boundary_y
-            }})
-        """
-        params["boundary_x"] = props["boundary_x"]
-        params["boundary_y"] = props["boundary_y"]
 
     db.execute(query, **params)
 

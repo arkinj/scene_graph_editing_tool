@@ -24,7 +24,7 @@ back to [x, y, z] lists for ``model.update_node()``.
 """
 
 from heracles import constants as hc
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -49,6 +49,9 @@ _POS_DECIMALS = 4
 
 class PropertyPanel(QWidget):
     """Dock widget content for viewing and editing node properties."""
+
+    # Emitted after form population with the ideal height to show all fields.
+    height_requested = Signal(int)
 
     def __init__(self, model: SceneGraphModel, graph_view=None, parent: QWidget | None = None):
         super().__init__(parent)
@@ -77,6 +80,8 @@ class PropertyPanel(QWidget):
         # Track editable widgets so we can read values on Apply.
         self._widgets: dict[str, QWidget] = {}
         self._apply_btn: QPushButton | None = None
+        # Snapshot of widget values at populate time, for dirty detection.
+        self._original_values: dict[str, object] = {}
 
         # Listen for selection changes.
         self._model.selection_changed.connect(self._on_selection_changed)
@@ -248,6 +253,15 @@ class PropertyPanel(QWidget):
         self._apply_btn.clicked.connect(self._on_apply)
         self._form_layout.addRow("", self._apply_btn)
 
+        # Snapshot current widget values and connect change signals so the
+        # Apply button highlights when any value diverges from the model.
+        self._snapshot_original_values()
+        self._connect_dirty_signals()
+
+        # Request enough height to show the full form without scrolling,
+        # capped so the snapshot panel stays usable.
+        self._request_form_height()
+
     # ------------------------------------------------------------------
     # Apply changes
     # ------------------------------------------------------------------
@@ -295,6 +309,80 @@ class PropertyPanel(QWidget):
                 from PySide6.QtWidgets import QMessageBox
 
                 QMessageBox.critical(self, "Update Error", str(e))
+
+    # ------------------------------------------------------------------
+    # Dynamic height — expand to fit form, leave room for snapshots
+    # ------------------------------------------------------------------
+
+    def _request_form_height(self):
+        """Emit height_requested with the form's ideal height.
+
+        Deferred to the next event loop tick so Qt has finished laying
+        out the newly added widgets before we read sizeHint.
+        """
+        QTimer.singleShot(0, self._emit_form_height)
+
+    def _emit_form_height(self):
+        self._form_container.adjustSize()
+        # Add padding for the scroll area frame and dock widget title bar,
+        # which sizeHint doesn't account for.
+        padding = 50
+        self.height_requested.emit(self._form_container.sizeHint().height() + padding)
+
+    # ------------------------------------------------------------------
+    # Dirty detection — highlight Apply when edits are pending
+    # ------------------------------------------------------------------
+
+    def _snapshot_original_values(self):
+        """Record the current value of every editable widget."""
+        self._original_values = {}
+        for key, widget in self._widgets.items():
+            if isinstance(widget, QDoubleSpinBox):
+                self._original_values[key] = widget.value()
+            elif isinstance(widget, QLineEdit):
+                self._original_values[key] = widget.text()
+            elif isinstance(widget, QComboBox):
+                self._original_values[key] = widget.currentText()
+
+    def _connect_dirty_signals(self):
+        """Wire up change signals so _update_apply_style runs on any edit."""
+        for key, widget in self._widgets.items():
+            if isinstance(widget, QDoubleSpinBox):
+                widget.valueChanged.connect(self._update_apply_style)
+            elif isinstance(widget, QLineEdit):
+                widget.textChanged.connect(self._update_apply_style)
+            elif isinstance(widget, QComboBox):
+                widget.currentTextChanged.connect(self._update_apply_style)
+
+    def _is_dirty(self) -> bool:
+        """Return True if any widget value differs from its original."""
+        for key, original in self._original_values.items():
+            widget = self._widgets.get(key)
+            if widget is None:
+                continue
+            if isinstance(widget, QDoubleSpinBox):
+                if widget.value() != original:
+                    return True
+            elif isinstance(widget, QLineEdit):
+                if widget.text() != original:
+                    return True
+            elif isinstance(widget, QComboBox):
+                if widget.currentText() != original:
+                    return True
+        return False
+
+    def _update_apply_style(self):
+        """Highlight the Apply button when there are unapplied changes."""
+        if self._apply_btn is None:
+            return
+        if self._is_dirty():
+            self._apply_btn.setStyleSheet(
+                "QPushButton { background-color: #e8a838; font-weight: bold; }"
+            )
+            self._apply_btn.setText("Apply *")
+        else:
+            self._apply_btn.setStyleSheet("")
+            self._apply_btn.setText("Apply")
 
     # ------------------------------------------------------------------
     # Widget helpers

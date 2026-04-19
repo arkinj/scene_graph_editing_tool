@@ -372,7 +372,24 @@ class GraphView(QWidget):
         if props and "center" in props:
             world_z = float(props["center"][2])
 
-        self._model.update_node(node_symbol, {"center": [world_x, world_y, world_z]})
+        updates = {"center": [world_x, world_y, world_z]}
+
+        # Move the bounding box center by the same delta so it tracks the
+        # node position.  Without this, bbox_center stays at the original
+        # position (or origin for newly created nodes).
+        if props and "bbox_center" in props:
+            old_center = props["center"]
+            dx = world_x - float(old_center[0])
+            dy = world_y - float(old_center[1])
+            # z doesn't change from 2D drag, but carry it through.
+            bbox = props["bbox_center"]
+            updates["bbox_center"] = [
+                float(bbox[0]) + dx,
+                float(bbox[1]) + dy,
+                float(bbox[2]),
+            ]
+
+        self._model.update_node(node_symbol, updates)
 
     # ------------------------------------------------------------------
     # Full rebuild (on graph_loaded)
@@ -474,6 +491,9 @@ class GraphView(QWidget):
                             to_item.pos().x(),
                             to_item.pos().y(),
                         )
+
+        # Redraw boundary overlay so it tracks the node's new position.
+        self._redraw_node_boundary(node_symbol, layer_label, props)
 
     def _on_node_removed(self, node_symbol: str, layer_label: str):
         """Remove a single node, its connected edges, and boundary overlay."""
@@ -891,62 +911,71 @@ class GraphView(QWidget):
     # Toggle this to compare the two representations visually.
     USE_POLAR_BOUNDARY = True
 
-    def _draw_boundaries(self):
-        """Draw boundary overlays for all node types that have boundary data.
-
-        Supports:
-        - Room: polygon (from Draw Region) or bounding box rectangle
-        - TravNode (MeshPlace): polar polygon from radii, or rectangle from max_radius
-        - Place2d: polygon from Point3D boundary list
-        - Object: bounding box rectangle
-        """
+    def _make_boundary_item(self, layer_label, props):
+        """Create a boundary overlay item for a single node, or None."""
         from heracles import constants as hc
 
-        S = DEFAULT_SCALE
+        style = STYLE_BY_LABEL.get(layer_label)
+        if not style:
+            return None
+        color = QColor(style.color)
 
+        # Room: polygon from Draw Region, or bounding box
+        if layer_label == hc.ROOMS:
+            if "boundary_x" in props and "boundary_y" in props:
+                bx, by = props["boundary_x"], props["boundary_y"]
+                if len(bx) >= 3:
+                    return make_polygon_overlay(bx, by, color, DEFAULT_SCALE)
+            elif "bbox_l" in props:
+                return make_bbox_overlay(props, color, DEFAULT_SCALE)
+
+        # TravNode: polar polygon from radii, or rectangle
+        elif "radii" in props and props["radii"]:
+            if self.USE_POLAR_BOUNDARY:
+                return make_radii_polygon_overlay(props, color, DEFAULT_SCALE)
+            else:
+                return make_radii_rect_overlay(props, color, DEFAULT_SCALE)
+
+        # Place2d: polygon from Point3D list
+        elif (
+            "boundary" in props
+            and isinstance(props["boundary"], list)
+            and len(props["boundary"]) >= 3
+        ):
+            return make_point3d_polygon_overlay(props["boundary"], color, DEFAULT_SCALE)
+
+        # Object: bounding box rectangle
+        elif layer_label == hc.OBJECTS and "bbox_l" in props:
+            return make_bbox_overlay(props, color, DEFAULT_SCALE)
+
+        return None
+
+    def _draw_boundaries(self):
+        """Draw boundary overlays for all node types that have boundary data."""
         for ns, props in self._model.get_all_nodes().items():
             layer_label = self._model.get_node_layer(ns)
-            style = STYLE_BY_LABEL.get(layer_label)
-            if not style:
-                continue
-            color = QColor(style.color)
-
-            item = None
-
-            # Room: polygon from Draw Region, or bounding box
-            if layer_label == hc.ROOMS:
-                if "boundary_x" in props and "boundary_y" in props:
-                    bx, by = props["boundary_x"], props["boundary_y"]
-                    if len(bx) >= 3:
-                        item = make_polygon_overlay(bx, by, color, S)
-                elif "bbox_l" in props:
-                    item = make_bbox_overlay(props, color, S)
-
-            # TravNode: polar polygon from radii, or rectangle
-            elif "radii" in props and props["radii"]:
-                if self.USE_POLAR_BOUNDARY:
-                    item = make_radii_polygon_overlay(props, color, S)
-                else:
-                    item = make_radii_rect_overlay(props, color, S)
-
-            # Place2d: polygon from Point3D list
-            elif (
-                "boundary" in props
-                and isinstance(props["boundary"], list)
-                and len(props["boundary"]) >= 3
-            ):
-                item = make_point3d_polygon_overlay(props["boundary"], color, S)
-
-            # Object: bounding box rectangle
-            elif layer_label == hc.OBJECTS and "bbox_l" in props:
-                item = make_bbox_overlay(props, color, S)
-
+            item = self._make_boundary_item(layer_label, props)
             if item:
                 item.setZValue(-2)
                 self._scene.addItem(item)
                 self._boundary_items[ns] = item
                 if not self._model.is_layer_visible(layer_label):
                     item.setVisible(False)
+
+    def _redraw_node_boundary(self, node_symbol, layer_label, props):
+        """Replace a single node's boundary overlay after a position change."""
+        # Remove old overlay.
+        old = self._boundary_items.pop(node_symbol, None)
+        if old is not None:
+            self._scene.removeItem(old)
+
+        item = self._make_boundary_item(layer_label, props)
+        if item:
+            item.setZValue(-2)
+            self._scene.addItem(item)
+            self._boundary_items[node_symbol] = item
+            if not self._model.is_layer_visible(layer_label):
+                item.setVisible(False)
 
     # ------------------------------------------------------------------
     # Export to image
